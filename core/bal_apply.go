@@ -18,6 +18,7 @@ package core
 
 import (
 	"fmt"
+	"sync"
 	"time"
 
 	"github.com/ethereum/go-ethereum/common"
@@ -76,6 +77,21 @@ func ApplyBlockAccessList(statedb *state.StateDB, list *bal.BlockAccessList) {
 	}
 }
 
+// finalizedBALProof stores the smallest reusable ancestry consequence for a
+// sequential catch-up stream. Once a block is linked to the current consensus
+// finalized header, the next block needs only its parent hash checked against
+// the previously verified hash. A changed finality anchor invalidates the proof.
+//
+// The mutex covers both the saved witness and the initial skeleton scan, so
+// concurrent readers cannot promote an unverified or partially built witness.
+type finalizedBALProof struct {
+	sync.Mutex
+	final common.Hash
+	number uint64
+	hash common.Hash
+	valid bool
+}
+
 // useAccessListReconstruction reports whether block's post-state may be rebuilt
 // from its EIP-7928 access list instead of executing its transactions.
 //
@@ -101,32 +117,59 @@ func (bc *BlockChain) useAccessListReconstruction(block *types.Block, vmConfig v
 	if final == nil || block.NumberU64() > final.Number.Uint64() {
 		return false
 	}
+	anchor := final.Hash()
 	if block.NumberU64() == final.Number.Uint64() {
-		return block.Hash() == final.Hash()
+		return block.Hash() == anchor
 	}
-	// Only the finalized chain can bypass execution. When its header
-	// ancestry is unavailable, fall back to ordinary block execution.
+
+	proof := &bc.balFinalityProof
+	proof.Lock()
+	defer proof.Unlock()
+	if proof.final != anchor {
+		// A changed consensus-finality anchor revokes all prior reuse.
+		proof.final, proof.valid = anchor, false
+	}
+	if proof.valid && block.NumberU64() == proof.number+1 && block.ParentHash() == proof.hash {
+		// The new header extends an already verified member of this exact
+		// finalized chain. Header hashes bind all remaining block fields.
+		if current := bc.CurrentFinalBlock(); current != nil && current.Hash() == anchor {
+			proof.number, proof.hash = block.NumberU64(), block.Hash()
+			return true
+		}
+		return false
+	}
+
+	// A first or out-of-order block must earn a fresh ancestry proof. Prefer
+	// the canonical header chain when available, otherwise check each
+	// skeleton parent link from the finalized header all the way down.
 	gap := final.Number.Uint64() - block.NumberU64()
 	maxNonCanonical := gap
-	ancestor, number := bc.hc.GetAncestor(final.Hash(), final.Number.Uint64(), gap, &maxNonCanonical)
-	if number == block.NumberU64() && ancestor == block.Hash() {
-		return true
-	}
-	// Skeleton-only headers have not entered the canonical HeaderChain.
-	// Check every parent link from the finalized anchor to the candidate,
-	// failing closed for missing, stale or inconsistent skeleton headers.
-	want := final.Hash()
-	for height := final.Number.Uint64(); height > block.NumberU64(); height-- {
-		header := bc.hc.GetHeader(want, height)
-		if header == nil {
-			header = rawdb.ReadSkeletonHeader(bc.db, height)
+	ancestor, number := bc.hc.GetAncestor(anchor, final.Number.Uint64(), gap, &maxNonCanonical)
+	verified := number == block.NumberU64() && ancestor == block.Hash()
+	if !verified {
+		want := anchor
+		for height := final.Number.Uint64(); height > block.NumberU64(); height-- {
+			header := bc.hc.GetHeader(want, height)
+			if header == nil {
+				header = rawdb.ReadSkeletonHeader(bc.db, height)
+			}
+			if header == nil || header.Number.Uint64() != height || header.Hash() != want {
+				return false
+			}
+			want = header.ParentHash
 		}
-		if header == nil || header.Number.Uint64() != height || header.Hash() != want {
-			return false
-		}
-		want = header.ParentHash
+		verified = want == block.Hash()
 	}
-	return want == block.Hash()
+	if !verified {
+		return false
+	}
+	// Do not publish proof derived from an anchor that has been replaced
+	// while walking the headers. The next call may re-evaluate a new anchor.
+	if current := bc.CurrentFinalBlock(); current == nil || current.Hash() != anchor {
+		return false
+	}
+	proof.valid, proof.number, proof.hash = true, block.NumberU64(), block.Hash()
+	return true
 }
 
 // processBlockFromAccessList rebuilds the post-state of block from its access
