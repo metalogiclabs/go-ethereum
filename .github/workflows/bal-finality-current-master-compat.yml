@@ -1,0 +1,48 @@
+name: BAL Finality Current Master Compatibility
+
+on:
+  push:
+    branches:
+      - bal-finality-current-master-compat-v1
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  merge-qualification:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: false
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.27'
+          cache: false
+      - name: Resolve exact source and master merge base
+        run: |
+          git fetch --no-tags --depth=128 origin 901b96c4f2c0ef92d970794774389a4fc169c970
+          git fetch --no-tags --depth=128 https://github.com/ethereum/go-ethereum.git 466c37e3329b119a222b5a275f696da697f6103b
+          if ! git merge-base 901b96c4f2c0ef92d970794774389a4fc169c970 466c37e3329b119a222b5a275f696da697f6103b; then
+            git fetch --no-tags --deepen=512 origin 901b96c4f2c0ef92d970794774389a4fc169c970
+            git fetch --no-tags --deepen=512 https://github.com/ethereum/go-ethereum.git 466c37e3329b119a222b5a275f696da697f6103b
+            git merge-base 901b96c4f2c0ef92d970794774389a4fc169c970 466c37e3329b119a222b5a275f696da697f6103b
+          fi
+      - name: Merge reconstruction plus finalized proof on exact master
+        run: |
+          git worktree add --detach ../geth-current-master 466c37e3329b119a222b5a275f696da697f6103b
+          cd ../geth-current-master
+          if ! git -c user.name='Metalogic CI' -c user.email='ci@metalogiclabs.xyz' merge --no-commit --no-ff 901b96c4f2c0ef92d970794774389a4fc169c970; then
+            echo 'Merge was not clean. Conflicted files:' >&2
+            git diff --name-only --diff-filter=U
+            exit 1
+          fi
+          git diff --name-only --diff-filter=U | tee /tmp/conflicts
+          test ! -s /tmp/conflicts
+          go test ./core -run '^(TestBALFinalityWindow|TestBALFinalityMultiwindowInsertChain|TestInsertChainReconstructsFinalizedState)$' -count=1
+      - name: Full core tests on current master integration
+        run: |
+          cd ../geth-current-master
+          go test ./core -count=1
