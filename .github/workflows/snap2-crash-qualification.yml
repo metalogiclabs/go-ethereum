@@ -12,7 +12,7 @@ permissions:
 jobs:
   qualification:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 35
     steps:
       - uses: actions/checkout@v4
         with:
@@ -26,7 +26,7 @@ jobs:
         run: |
           gofmt -d eth/protocols/snap/syncv2.go eth/protocols/snap/syncv2_commit_test.go | tee /tmp/gofmt.diff
           test ! -s /tmp/gofmt.diff
-      - name: Verify regression fails on exact pre-fix baseline
+      - name: Verify committed-error regression fails before fix
         run: |
           git fetch --no-tags --depth=1 origin 21f1eb2fa356ae35561326ae8d14fbe7c577f004
           git worktree add --detach ../snap2-baseline FETCH_HEAD
@@ -38,32 +38,16 @@ jobs:
             result=$?
             set -e
             cat /tmp/snap2-baseline.log
-            if [ "$result" -eq 0 ]; then
-              echo 'Unexpected baseline pass: regression not demonstrated' >&2
-              exit 1
-            fi
+            test "$result" -ne 0
             grep -q -- '--- FAIL: TestCatchUpCommittedWriteErrorPreservesJournal' /tmp/snap2-baseline.log
             grep -q 'restart sync failed' /tmp/snap2-baseline.log
           )
-      - name: Run regression on fix
-        run: go test ./eth/protocols/snap -run '^TestCatchUp(Committed|Uncommitted)WriteErrorPreservesJournal
-        run: go test ./eth/protocols/snap -count=1
-      - name: Qualify current upstream master plus PR patch
+      - name: Both error-boundary regressions on PR head
         run: |
-          git fetch --no-tags --depth=3 origin 02bc052aca1ffab1b8899777ee825e15aea56a83
-          git fetch --no-tags --depth=1 https://github.com/ethereum/go-ethereum.git 466c37e3329b119a222b5a275f696da697f6103b
-          git worktree add --detach ../snap2-current-master FETCH_HEAD
-          (
-            cd ../snap2-current-master
-            git cherry-pick --no-commit c1e613cb83b95ff756403007b3f9254b9af8ad09 02bc052aca1ffab1b8899777ee825e15aea56a83
-            gofmt -d eth/protocols/snap/syncv2.go eth/protocols/snap/syncv2_commit_test.go | tee /tmp/current-master-gofmt.diff
-            test ! -s /tmp/current-master-gofmt.diff
-            go test ./eth/protocols/snap -run '^TestCatchUp(Committed|Uncommitted)WriteErrorPreservesJournal
-          )
- -count=1 -v
-      - name: Run full snap package
+          go test ./eth/protocols/snap -run '^TestCatchUp(Committed|Uncommitted)WriteErrorPreservesJournal$' -count=1 -v
+      - name: Full snap package on PR head
         run: go test ./eth/protocols/snap -count=1
-      - name: Qualify current upstream master plus PR patch
+      - name: Qualify exact production patch and tests on upstream master
         run: |
           git fetch --no-tags --depth=2 origin c1e613cb83b95ff756403007b3f9254b9af8ad09
           git fetch --no-tags --depth=1 https://github.com/ethereum/go-ethereum.git 466c37e3329b119a222b5a275f696da697f6103b
@@ -71,27 +55,9 @@ jobs:
           (
             cd ../snap2-current-master
             git cherry-pick --no-commit c1e613cb83b95ff756403007b3f9254b9af8ad09
+            cp ../go-ethereum/eth/protocols/snap/syncv2_commit_test.go eth/protocols/snap/syncv2_commit_test.go
             gofmt -d eth/protocols/snap/syncv2.go eth/protocols/snap/syncv2_commit_test.go | tee /tmp/current-master-gofmt.diff
             test ! -s /tmp/current-master-gofmt.diff
-            go test ./eth/protocols/snap -run '^TestCatchUpCommittedWriteErrorPreservesJournal$' -count=1 -v
-            go test ./eth/protocols/snap -count=1
-          )
- -count=1 -v
-            go test ./eth/protocols/snap -count=1
-          )
- -count=1 -v
-      - name: Run full snap package
-        run: go test ./eth/protocols/snap -count=1
-      - name: Qualify current upstream master plus PR patch
-        run: |
-          git fetch --no-tags --depth=2 origin c1e613cb83b95ff756403007b3f9254b9af8ad09
-          git fetch --no-tags --depth=1 https://github.com/ethereum/go-ethereum.git 466c37e3329b119a222b5a275f696da697f6103b
-          git worktree add --detach ../snap2-current-master FETCH_HEAD
-          (
-            cd ../snap2-current-master
-            git cherry-pick --no-commit c1e613cb83b95ff756403007b3f9254b9af8ad09
-            gofmt -d eth/protocols/snap/syncv2.go eth/protocols/snap/syncv2_commit_test.go | tee /tmp/current-master-gofmt.diff
-            test ! -s /tmp/current-master-gofmt.diff
-            go test ./eth/protocols/snap -run '^TestCatchUpCommittedWriteErrorPreservesJournal$' -count=1 -v
+            go test ./eth/protocols/snap -run '^TestCatchUp(Committed|Uncommitted)WriteErrorPreservesJournal$' -count=1 -v
             go test ./eth/protocols/snap -count=1
           )
