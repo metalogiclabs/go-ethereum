@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   merge-qualification:
@@ -82,3 +82,10 @@ jobs:
         run: |
           cd ../geth-current-master
           go test ./core -count=1
+      - name: Publish independently qualified integration
+        run: |
+          cd ../geth-current-master
+          git -c user.name='Metalogic CI' -c user.email='ci@metalogiclabs.xyz' commit -m 'core: integrate finalized BAL reconstruction proof on current geth master'
+          test "$(git rev-parse HEAD^1)" = 466c37e3329b119a222b5a275f696da697f6103b
+          git branch bal-finality-current-master-integrated-v1
+          git push origin bal-finality-current-master-integrated-v1
