@@ -86,10 +86,10 @@ func ApplyBlockAccessList(statedb *state.StateDB, list *bal.BlockAccessList) {
 // concurrent readers cannot promote an unverified or partially built witness.
 type finalizedBALProof struct {
 	sync.Mutex
-	final common.Hash
+	final  common.Hash
 	number uint64
-	hash common.Hash
-	valid bool
+	hash   common.Hash
+	valid  bool
 }
 
 // useAccessListReconstruction reports whether block's post-state may be rebuilt
