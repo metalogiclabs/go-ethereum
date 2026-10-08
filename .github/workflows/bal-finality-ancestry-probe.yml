@@ -56,3 +56,29 @@ jobs:
           fi
           grep -q -- '--- FAIL: TestBALReconstructionFinalityForkImport' /tmp/fork-import.log
           grep -q 'unfinalized competing block bypassed execution' /tmp/fork-import.log
+      - name: Test minimal fail-closed finality ancestry guard
+        run: |
+          cd ../reconstruction-candidate
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path("core/bal_apply.go")
+          code = p.read_text()
+          old = "\tfinal := bc.CurrentFinalBlock()\n\treturn final != nil && block.NumberU64() <= final.Number.Uint64()"
+          new = """\tfinal := bc.CurrentFinalBlock()
+          \tif final == nil || block.NumberU64() > final.Number.Uint64() {
+          \t\treturn false
+          \t}
+          \tif block.NumberU64() == final.Number.Uint64() {
+          \t\treturn block.Hash() == final.Hash()
+          \t}
+          \t// Fail closed if no authenticated header ancestry is available.
+          \tgap := final.Number.Uint64() - block.NumberU64()
+          \tmaxNonCanonical := gap
+          \tancestor, number := bc.hc.GetAncestor(final.Hash(), final.Number.Uint64(), gap, &maxNonCanonical)
+          \treturn number == block.NumberU64() && ancestor == block.Hash()"""
+          assert code.count(old) == 1, "guard splice location changed"
+          p.write_text(code.replace(old, new))
+          PY
+          gofmt -w core/bal_apply.go
+          go test ./core -run '^TestBALReconstructionFinality(Ancestry|ForkImport)$' -count=1 -v
+          go test ./core -run '^TestInsertChainReconstructsFinalizedState$' -count=1 -v
