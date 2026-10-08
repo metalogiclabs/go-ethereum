@@ -81,18 +81,14 @@ jobs:
           PY
           gofmt -w core/bal_apply.go
           go test ./core -run '^TestBALReconstructionFinality(Ancestry|ForkImport)$' -count=1 -v
-          # The candidate's old fixture has no finalized-header membership data,
-          # so correct fallback must execute rather than silently trust height.
           set +e
-          go test ./core -run '^TestInsertChainReconstructsFinalizedState
- -count=1 -v >/tmp/no-headers.log 2>&1
+          go test ./core -run '^TestInsertChainReconstructsFinalizedState$' -count=1 -v >/tmp/no-headers.log 2>&1
           result=$?
           set -e
           cat /tmp/no-headers.log
           test "$result" -ne 0
           grep -q 'has 2 receipts, want 0 (executionless)' /tmp/no-headers.log
-          # Give the existing fixture the canonical finalized header chain
-          # that the guard can independently verify.
+          # Seed a pinned canonical finalized header chain for this test fixture.
           python3 - <<'PY'
           from pathlib import Path
           p = Path("core/bal_apply_test.go")
@@ -102,8 +98,7 @@ jobs:
           \t// Mark the whole run as finalized, then catch up to it."""
           new = """\tdefer bc.Stop()
 
-          \t// Emulate a downloaded, canonical header chain: membership in the
-          \t// finalized ancestry is independently available before execution.
+          \t// Verified finalized ancestry is available from downloaded headers.
           \tfor _, blk := range blocks {
           \t\trawdb.WriteHeader(bc.db, blk.Header())
           \t\trawdb.WriteCanonicalHash(bc.db, blk.Hash(), blk.NumberU64())
@@ -114,5 +109,4 @@ jobs:
           p.write_text(code.replace(old, new))
           PY
           gofmt -w core/bal_apply_test.go
-          go test ./core -run '^TestInsertChainReconstructsFinalizedState
- -count=1 -v
+          go test ./core -run '^TestInsertChainReconstructsFinalizedState$' -count=1 -v
