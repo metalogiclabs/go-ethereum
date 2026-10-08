@@ -1,0 +1,30 @@
+name: BAL Finality Guard Qualification
+
+on:
+  push:
+    branches:
+      - bal-finality-ancestry-guard-v1
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  qualify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.27'
+          cache: false
+      - name: Formatting
+        run: |
+          gofmt -d core/bal_apply.go core/bal_apply_test.go core/bal_finality_ancestry_test.go | tee /tmp/bal-format.diff
+          test ! -s /tmp/bal-format.diff
+      - name: Finality ancestry and reconstruction regressions
+        run: |
+          go test ./core -run '^(TestBALReconstructionFinalityAncestry|TestBALReconstructionFinalityForkImport|TestInsertChainReconstructsFinalizedState|TestInsertChainExecutesWhenReconstructionDisabled|TestProcessBlockFromAccessListRejectsWrongState|TestApplyBlockAccessList)$' -count=1 -v
+      - name: Full core package tests
+        run: go test ./core -count=1
