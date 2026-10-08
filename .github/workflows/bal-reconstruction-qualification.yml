@@ -23,5 +23,5 @@ jobs:
           go-version: '1.27'
           cache: false
 
-      - name: Run BAL reconstruction differential oracle
-        run: go test ./core -run '^TestBALReconstructionDifferential$' -count=1
+      - name: Run BAL reconstruction differential oracles
+        run: go test ./core -run '^TestBALReconstruction.*Differential$' -count=1
