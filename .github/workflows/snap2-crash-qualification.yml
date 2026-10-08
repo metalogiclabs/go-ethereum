@@ -40,7 +40,7 @@ jobs:
             cat /tmp/snap2-baseline.log
             test "$result" -ne 0
             grep -q -- '--- FAIL: TestCatchUpCommittedWriteErrorPreservesJournal' /tmp/snap2-baseline.log
-            grep -q 'restart sync failed' /tmp/snap2-baseline.log
+            grep -q 'persisted pivot after failed write' /tmp/snap2-baseline.log
           )
       - name: Both error-boundary regressions on PR head
         run: |
