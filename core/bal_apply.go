@@ -97,7 +97,18 @@ func (bc *BlockChain) useAccessListReconstruction(block *types.Block, vmConfig v
 		return false
 	}
 	final := bc.CurrentFinalBlock()
-	return final != nil && block.NumberU64() <= final.Number.Uint64()
+	if final == nil || block.NumberU64() > final.Number.Uint64() {
+		return false
+	}
+	if block.NumberU64() == final.Number.Uint64() {
+		return block.Hash() == final.Hash()
+	}
+	// Only the finalized chain can bypass execution. When its header
+	// ancestry is unavailable, fall back to ordinary block execution.
+	gap := final.Number.Uint64() - block.NumberU64()
+	maxNonCanonical := gap
+	ancestor, number := bc.hc.GetAncestor(final.Hash(), final.Number.Uint64(), gap, &maxNonCanonical)
+	return number == block.NumberU64() && ancestor == block.Hash()
 }
 
 // processBlockFromAccessList rebuilds the post-state of block from its access
