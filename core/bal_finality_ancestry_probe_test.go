@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/ethereum/go-ethereum/core/rawdb"
+	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/core/vm"
 )
 
@@ -56,5 +57,39 @@ func TestBALReconstructionFinalityAncestry(t *testing.T) {
 	}
 	if bc.useAccessListReconstruction(oldFork, vm.Config{}) {
 		t.Fatal("non-finalized ancestor-height fork treated as finalized")
+	}
+}
+
+// TestBALReconstructionFinalityForkImport checks the full insertion path.
+// Import the first two blocks normally, announce the original third block as
+// finalized, then import a valid competing third block. A non-finalized
+// competing block must be executed, which means its receipts are retained.
+func TestBALReconstructionFinalityForkImport(t *testing.T) {
+	env, engine, blocks, _ := balBlocks(t)
+	cfg := DefaultConfig()
+	bc, err := NewBlockChain(rawdb.NewMemoryDatabase(), env.gspec, engine, cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer bc.Stop()
+	if n, err := bc.InsertChain(blocks[:len(blocks)-1]); err != nil {
+		t.Fatalf("import pre-fork history: %d, %v", n, err)
+	}
+
+	final := blocks[len(blocks)-1]
+	bc.SetFinalized(final.Header())
+	bc.cfg.BALStateReconstruction = true
+	forkHeader := final.Header()
+	forkHeader.Extra = []byte("competing canonical tip")
+	fork := final.WithSeal(forkHeader)
+	if fork.Hash() == final.Hash() {
+		t.Fatal("fixture did not create a competing block")
+	}
+	if n, err := bc.InsertChain([]*types.Block{fork}); err != nil {
+		t.Fatalf("import competing block: %d, %v", n, err)
+	}
+	receipts := bc.GetReceiptsByHash(fork.Hash())
+	if len(receipts) != len(fork.Transactions()) {
+		t.Fatalf("unfinalized competing block bypassed execution: got %d receipts, want %d", len(receipts), len(fork.Transactions()))
 	}
 }
