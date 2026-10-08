@@ -35,7 +35,7 @@ import (
 )
 
 var (
-	errCommittedBatch = errors.New("injected error after durable batch write")
+	errCommittedBatch   = errors.New("injected error after durable batch write")
 	errUncommittedBatch = errors.New("injected error before durable batch write")
 )
 
