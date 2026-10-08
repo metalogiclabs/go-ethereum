@@ -97,7 +97,7 @@ func (bc *BlockChain) useAccessListReconstruction(block *types.Block, vmConfig v
 		return false
 	}
 	final := bc.CurrentFinalBlock()
-	return final != nil && block.NumberU64() <= final.Number.Uint64()
+	return final != nil && bc.finalizedAncestryMember(final, block)
 }
 
 // processBlockFromAccessList rebuilds the post-state of block from its access
