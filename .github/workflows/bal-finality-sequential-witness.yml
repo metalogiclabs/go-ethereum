@@ -1,0 +1,32 @@
+name: BAL Finality Sequential Witness Qualification
+
+on:
+  push:
+    branches:
+      - bal-finality-sequential-witness-v1
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  qualification:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.27'
+          cache: false
+      - name: Formatting
+        run: |
+          gofmt -d core/blockchain.go core/bal_apply.go core/bal_finality_witness_test.go | tee /tmp/gofmt.diff
+          test ! -s /tmp/gofmt.diff
+      - name: Sequential witness and protected regressions
+        run: |
+          go test ./core -run '^(TestBALFinalityProof|TestBALReconstruction|TestInsertChainReconstructsFinalizedState|TestInsertChainExecutesWhenReconstructionDisabled|TestProcessBlockFromAccessListRejectsWrongState|TestApplyBlockAccessList)' -count=1 -v
+      - name: Full core suite
+        run: go test ./core -count=1
+      - name: Focused race test
+        run: go test -race ./core -run '^TestBALFinalityProof' -count=1
