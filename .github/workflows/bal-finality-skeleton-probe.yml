@@ -28,3 +28,5 @@ jobs:
           go test ./core -run '^(TestBALReconstructionFromSkeletonHeaders|TestBALReconstructionRejectsBrokenSkeletonChain|TestBALReconstructionFinalityAncestry|TestBALReconstructionFinalityForkImport|TestInsertChainReconstructsFinalizedState)$' -count=1 -v
       - name: Full core suite
         run: go test ./core -count=1
+      - name: Isolated skeleton ancestry scan benchmark
+        run: go test ./core -run '^$' -bench '^BenchmarkSkeletonFinalityScan$' -benchtime=3x -count=1 -benchmem
