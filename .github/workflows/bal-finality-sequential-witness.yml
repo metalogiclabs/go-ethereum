@@ -21,7 +21,7 @@ jobs:
           cache: false
       - name: Formatting
         run: |
-          gofmt -d core/blockchain.go core/bal_apply.go core/bal_finality_witness_test.go | tee /tmp/gofmt.diff
+          gofmt -d core/blockchain.go core/bal_apply.go core/bal_finality_witness_test.go core/bal_finality_witness_bench_test.go | tee /tmp/gofmt.diff
           test ! -s /tmp/gofmt.diff
       - name: Sequential witness and protected regressions
         run: |
@@ -30,3 +30,5 @@ jobs:
         run: go test ./core -count=1
       - name: Focused race test
         run: go test -race ./core -run '^TestBALFinalityProof' -count=1
+      - name: Paired ancestry reuse benchmark
+        run: go test ./core -run '^$' -bench '^BenchmarkBALFinalitySequentialWitness$' -benchtime=3x -count=1 -benchmem
