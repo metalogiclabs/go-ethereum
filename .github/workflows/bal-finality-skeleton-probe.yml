@@ -1,4 +1,4 @@
-name: BAL Finality Skeleton Integration Probe
+name: BAL Finality Skeleton Integration Qualification
 
 on:
   push:
@@ -10,7 +10,7 @@ permissions:
   contents: read
 
 jobs:
-  differential:
+  qualification:
     runs-on: ubuntu-latest
     timeout-minutes: 40
     steps:
@@ -19,54 +19,12 @@ jobs:
         with:
           go-version: '1.27'
           cache: false
-      - name: Confirm skeleton-only fast path unavailable at guard baseline
+      - name: Check Go formatting
         run: |
-          gofmt -d core/bal_finality_skeleton_test.go | tee /tmp/skeleton-format.diff
-          test ! -s /tmp/skeleton-format.diff
-          set +e
-          go test ./core -run '^TestBALReconstructionFromSkeletonHeaders$' -count=1 -v > /tmp/baseline.log 2>&1
-          result=$?
-          set -e
-          cat /tmp/baseline.log
-          test "$result" -ne 0
-          grep -q 'authenticated finalized skeleton ancestor unavailable to reconstruction' /tmp/baseline.log
-      - name: Overlay minimal skeleton hash-chain fallback
-        run: |
-          python3 - <<'PY'
-          from pathlib import Path
-          p = Path("core/bal_apply.go")
-          src = p.read_text()
-          insert = '"github.com/ethereum/go-ethereum/core/rawdb"'
-          before = '"github.com/ethereum/go-ethereum/common"'
-          assert src.count(before) == 1
-          src = src.replace(before, before + '\n\t' + insert)
-          old = """\tancestor, number := bc.hc.GetAncestor(final.Hash(), final.Number.Uint64(), gap, &maxNonCanonical)
-          \treturn number == block.NumberU64() && ancestor == block.Hash()"""
-          new = """\tancestor, number := bc.hc.GetAncestor(final.Hash(), final.Number.Uint64(), gap, &maxNonCanonical)
-          \tif number == block.NumberU64() && ancestor == block.Hash() {
-          \t\treturn true
-          \t}
-          \t// Skeleton-only headers are not in the canonical HeaderChain yet.
-          \t// Verify every parent link backwards from the consensus-finalized
-          \t// anchor. Never trust a matching height without hash ancestry.
-          \twant := final.Hash()
-          \tfor height := final.Number.Uint64(); height > block.NumberU64(); height-- {
-          \t\theader := bc.hc.GetHeader(want, height)
-          \t\tif header == nil {
-          \t\t\theader = rawdb.ReadSkeletonHeader(bc.db, height)
-          \t\t}
-          \t\tif header == nil || header.Number.Uint64() != height || header.Hash() != want {
-          \t\t\treturn false
-          \t\t}
-          \t\twant = header.ParentHash
-          \t}
-          \treturn want == block.Hash()"""
-          assert src.count(old) == 1
-          p.write_text(src.replace(old, new))
-          PY
-          gofmt -w core/bal_apply.go
-      - name: Recheck skeleton, fork and original reconstruction
+          gofmt -d core/bal_apply.go core/bal_finality_skeleton_test.go core/bal_finality_ancestry_test.go core/bal_apply_test.go | tee /tmp/gofmt-diff
+          test ! -s /tmp/gofmt-diff
+      - name: Check skeleton finality and competing fork regressions
         run: |
           go test ./core -run '^(TestBALReconstructionFromSkeletonHeaders|TestBALReconstructionRejectsBrokenSkeletonChain|TestBALReconstructionFinalityAncestry|TestBALReconstructionFinalityForkImport|TestInsertChainReconstructsFinalizedState)$' -count=1 -v
-      - name: Broader core tests
+      - name: Full core suite
         run: go test ./core -count=1
