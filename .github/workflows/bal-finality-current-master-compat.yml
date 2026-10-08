@@ -43,7 +43,7 @@ jobs:
             # conflicts can be resolved automatically. All other conflicts
             # are genuine new residuals and must fail the gate.
             git diff --name-only --diff-filter=U | sort > /tmp/unmerged
-            printf '%s\\n' cmd/utils/flags.go eth/backend.go | sort > /tmp/expected
+            (echo cmd/utils/flags.go; echo eth/backend.go) | sort > /tmp/expected
             diff -u /tmp/expected /tmp/unmerged
             git checkout --ours -- cmd/utils/flags.go eth/backend.go
             python3 - <<'PY'
