@@ -4,6 +4,7 @@ package core
 
 import (
 	"math/big"
+	"sync"
 	"testing"
 
 	"github.com/ethereum/go-ethereum/common"
@@ -115,4 +116,35 @@ func TestBALFinalityWindowFailsClosedOnMissingSkeleton(t *testing.T) {
 	if !bc.useAccessListReconstruction(blocks[0], vm.Config{}) {
 		t.Fatal("restored exact finalized lineage failed to verify")
 	}
+}
+
+// TestBALFinalityWindowConcurrentForkQueries checks that concurrent readers
+// cannot mix cached evidence from different windows or accidentally authorize
+// competing children while another goroutine refreshes the bounded window.
+func TestBALFinalityWindowConcurrentForkQueries(t *testing.T) {
+	bc, blocks := finalityWindowFixture(t, 520)
+	if !bc.useAccessListReconstruction(blocks[0], vm.Config{}) {
+		t.Fatal("failed to seed finalized ancestry")
+	}
+	var wg sync.WaitGroup
+	for worker := 0; worker < 8; worker++ {
+		wg.Add(1)
+		go func(worker int) {
+			defer wg.Done()
+			for i := 0; i < 48; i++ {
+				number := 1 + (worker*97+i*23)%len(blocks)
+				block := blocks[number-1]
+				if i%4 == 0 {
+					header := block.Header()
+					header.Extra = []byte{byte(worker), byte(i), 0x5a}
+					if bc.useAccessListReconstruction(block.WithSeal(header), vm.Config{}) {
+						t.Errorf("worker %d accepted fork at height %d", worker, number)
+					}
+				} else if !bc.useAccessListReconstruction(block, vm.Config{}) {
+					t.Errorf("worker %d rejected finalized block at height %d", worker, number)
+				}
+			}
+		}(worker)
+	}
+	wg.Wait()
 }
