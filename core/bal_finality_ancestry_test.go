@@ -1,6 +1,5 @@
 // Copyright 2026 The go-ethereum Authors
 // This file is part of the go-ethereum library.
-//
 package core
 
 import (
