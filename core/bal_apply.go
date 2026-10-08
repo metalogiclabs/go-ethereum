@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"github.com/ethereum/go-ethereum/common"
+	"github.com/ethereum/go-ethereum/core/rawdb"
 	"github.com/ethereum/go-ethereum/core/state"
 	"github.com/ethereum/go-ethereum/core/tracing"
 	"github.com/ethereum/go-ethereum/core/types"
@@ -108,7 +109,24 @@ func (bc *BlockChain) useAccessListReconstruction(block *types.Block, vmConfig v
 	gap := final.Number.Uint64() - block.NumberU64()
 	maxNonCanonical := gap
 	ancestor, number := bc.hc.GetAncestor(final.Hash(), final.Number.Uint64(), gap, &maxNonCanonical)
-	return number == block.NumberU64() && ancestor == block.Hash()
+	if number == block.NumberU64() && ancestor == block.Hash() {
+		return true
+	}
+	// Skeleton-only headers have not entered the canonical HeaderChain.
+	// Check every parent link from the finalized anchor to the candidate,
+	// failing closed for missing, stale or inconsistent skeleton headers.
+	want := final.Hash()
+	for height := final.Number.Uint64(); height > block.NumberU64(); height-- {
+		header := bc.hc.GetHeader(want, height)
+		if header == nil {
+			header = rawdb.ReadSkeletonHeader(bc.db, height)
+		}
+		if header == nil || header.Number.Uint64() != height || header.Hash() != want {
+			return false
+		}
+		want = header.ParentHash
+	}
+	return want == block.Hash()
 }
 
 // processBlockFromAccessList rebuilds the post-state of block from its access
