@@ -4118,13 +4118,12 @@ func TestCatchUpWriteFailureDoesNotAdvancePivot(t *testing.T) {
 					term   = func() { once.Do(func() { close(cancel) }) }
 				)
 				syncer := newSyncerV2(faildb, nodeScheme)
+				syncer.loadSyncStatus()
 				src := newTestPeerV2("fault", t, term)
-				src.accountTrie = sourceAccountTrie.Copy()
-				src.accountValues = elems
 				src.accessLists = bals
 				syncer.Register(src)
 				src.remote = syncer
-				if err := syncer.Sync(pivotB, cancel); err == nil {
+				if err := syncer.catchUp(pivotB, cancel); err == nil {
 					t.Fatal("expected injected batch write failure")
 				}
 			}
@@ -4148,13 +4147,12 @@ func TestCatchUpWriteFailureDoesNotAdvancePivot(t *testing.T) {
 					term   = func() { once.Do(func() { close(cancel) }) }
 				)
 				syncer := newSyncerV2(db, nodeScheme)
+				syncer.loadSyncStatus()
 				src := newTestPeerV2("retry", t, term)
-				src.accountTrie = sourceAccountTrie.Copy()
-				src.accountValues = elems
 				src.accessLists = bals
 				syncer.Register(src)
 				src.remote = syncer
-				if err := syncer.Sync(pivotB, cancel); err != nil {
+				if err := syncer.catchUp(pivotB, cancel); err != nil {
 					t.Fatalf("retry after failed batch did not converge: %v", err)
 				}
 			}
