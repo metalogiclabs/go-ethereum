@@ -34,14 +34,50 @@ jobs:
         run: |
           git worktree add --detach ../geth-current-master 466c37e3329b119a222b5a275f696da697f6103b
           cd ../geth-current-master
-          if ! git -c user.name='Metalogic CI' -c user.email='ci@metalogiclabs.xyz' merge --no-commit --no-ff 901b96c4f2c0ef92d970794774389a4fc169c970; then
-            echo 'Merge was not clean. Conflicted files:' >&2
-            git diff --name-only --diff-filter=U
-            exit 1
+          set +e
+          git -c user.name='Metalogic CI' -c user.email='ci@metalogiclabs.xyz' merge --no-commit --no-ff 901b96c4f2c0ef92d970794774389a4fc169c970
+          status=$?
+          set -e
+          if [ "$status" -ne 0 ]; then
+            # Only the two independently observed configuration integration
+            # conflicts can be resolved automatically. All other conflicts
+            # are genuine new residuals and must fail the gate.
+            git diff --name-only --diff-filter=U | sort > /tmp/unmerged
+            printf '%s\\n' cmd/utils/flags.go eth/backend.go | sort > /tmp/expected
+            diff -u /tmp/expected /tmp/unmerged
+            git checkout --ours -- cmd/utils/flags.go eth/backend.go
+            python3 - <<'PY'
+          from pathlib import Path
+          p = Path("cmd/utils/flags.go")
+          s = p.read_text()
+          flag = '''\tStateBALReconstructionFlag = &cli.BoolFlag{
+          \t\tName:     "state.balreconstruction",
+          \t\tUsage:    "Reconstruct finalized state from EIP-7928 BALs instead of executing (experimental; no receipts for reconstructed blocks)",
+          \t\tCategory: flags.StateCategory,
+          \t}
+          '''
+          anchor = '\tBinTrieGroupDepthFlag = &cli.IntFlag{'
+          assert s.count(anchor) == 1 and 'StateBALReconstructionFlag' not in s
+          s = s.replace(anchor, flag + anchor)
+          marker = '\tif ctx.IsSet(CacheNoPrecompileFlag.Name) {'
+          assert s.count(marker) == 1
+          s = s.replace(marker, '\tif ctx.IsSet(StateBALReconstructionFlag.Name) {\n\t\tcfg.BALStateReconstruction = ctx.Bool(StateBALReconstructionFlag.Name)\n\t}\n' + marker)
+          p.write_text(s)
+
+          p = Path("eth/backend.go")
+          s = p.read_text()
+          anchor = '\t\t\tNoPrefetch:              config.NoPrefetch,'
+          assert s.count(anchor) == 1 and 'BALStateReconstruction:' not in s
+          s = s.replace(anchor, anchor + '\n\t\t\tBALStateReconstruction:  config.BALStateReconstruction,')
+          p.write_text(s)
+          PY
+            gofmt -w cmd/utils/flags.go eth/backend.go
+            git add cmd/utils/flags.go eth/backend.go
           fi
           git diff --name-only --diff-filter=U | tee /tmp/conflicts
           test ! -s /tmp/conflicts
           go test ./core -run '^(TestBALFinalityWindow|TestBALFinalityMultiwindowInsertChain|TestInsertChainReconstructsFinalizedState)$' -count=1
+          go test ./eth ./cmd/utils -run '^$' -count=1
       - name: Full core tests on current master integration
         run: |
           cd ../geth-current-master
