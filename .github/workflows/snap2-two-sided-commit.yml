@@ -1,0 +1,32 @@
+name: Snap2 Two-Sided Commit Qualification
+
+on:
+  push:
+    branches:
+      - snap2-two-sided-commit-recovery-v1
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  qualify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.27'
+          cache: false
+      - name: Formatting
+        run: |
+          gofmt -d eth/protocols/snap/syncv2_commit_test.go | tee /tmp/gofmt.diff
+          test ! -s /tmp/gofmt.diff
+      - name: Both exact failure-boundary regressions
+        run: |
+          go test ./eth/protocols/snap -run '^TestCatchUp(Committed|Uncommitted)WriteErrorPreservesJournal$' -count=1 -v
+      - name: Full snap package
+        run: go test ./eth/protocols/snap -count=1
+      - name: Focused race qualification
+        run: go test -race ./eth/protocols/snap -run '^TestCatchUp(Committed|Uncommitted)WriteErrorPreservesJournal$' -count=1
