@@ -169,6 +169,13 @@ func TestInsertChainReconstructsFinalizedState(t *testing.T) {
 	}
 	defer bc.Stop()
 
+	// Header ancestry is available from the finalized canonical chain before
+	// executing blocks. This is the authority for the executionless fast path.
+	for _, blk := range blocks {
+		rawdb.WriteHeader(bc.db, blk.Header())
+		rawdb.WriteCanonicalHash(bc.db, blk.Hash(), blk.NumberU64())
+	}
+
 	// Mark the whole run as finalized, then catch up to it.
 	bc.SetFinalized(blocks[len(blocks)-1].Header())
 	if n, err := bc.InsertChain(blocks); err != nil {
