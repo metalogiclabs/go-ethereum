@@ -1,0 +1,30 @@
+name: Finalized BAL Import A-B Qualification
+
+on:
+  push:
+    branches:
+      - bal-finalized-import-ab-v1
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  benchmark:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.27'
+          cache: false
+      - name: Formatting
+        run: |
+          gofmt -d core/bal_finalized_import_bench_test.go | tee /tmp/fmt.diff
+          test ! -s /tmp/fmt.diff
+      - name: Differential 260-block importer control
+        run: go test ./core -run '^TestBALFinalityMultiwindowInsertChain$' -count=1 -v
+      - name: Execute vs reconstruct in-process import
+        run: |
+          go test ./core -run '^$' -bench '^BenchmarkFinalizedBALBlockImport$' -benchtime=3x -count=2 -benchmem -timeout=25m
