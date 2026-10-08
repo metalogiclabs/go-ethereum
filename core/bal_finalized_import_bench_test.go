@@ -4,6 +4,7 @@ package core
 
 import (
 	"fmt"
+	"math/big"
 	"testing"
 
 	"github.com/ethereum/go-ethereum/common"
@@ -29,11 +30,18 @@ func BenchmarkFinalizedBALBlockImport(b *testing.B) {
 			txCount := 0
 			_, blocks, _ := GenerateChainWithGenesis(env.gspec, engine, 260, func(i int, g *BlockGen) {
 				if i%stride == 0 {
-					g.AddTx(balTx(&testing.T{}, env, g.TxNonce(env.from), &counterAddr, common.Big0, nil))
+					tx, err := types.SignTx(types.NewTx(&types.DynamicFeeTx{
+						ChainID: env.cfg.ChainID, Nonce: g.TxNonce(env.from),
+						To: &counterAddr, Value: common.Big0, Gas: 500000,
+						GasFeeCap: big.NewInt(1_000_000_000_000), GasTipCap: big.NewInt(1_000_000_000),
+					}), env.signer, env.key)
+					if err != nil {
+						b.Fatal(err)
+					}
+					g.AddTx(tx)
 					txCount++
 				}
 			})
-			// balTx uses t.Helper/Fatalf, so the fixture is built before timers.
 			for _, block := range blocks {
 				if block.AccessList() == nil {
 					b.Fatalf("missing BAL at height %d", block.NumberU64())
