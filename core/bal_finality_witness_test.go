@@ -112,3 +112,37 @@ func TestBALFinalityProofRestartRequiresEvidence(t *testing.T) {
 		t.Fatal("volatile ancestor evidence leaked across new blockchain")
 	}
 }
+
+// TestBALFinalityProofRejectsForkedSequentialChild is the decisive separator:
+// knowing a parent lies on the finalized chain does not tell us which of its
+// children does. A valid parent link alone is insufficient membership evidence.
+func TestBALFinalityProofRejectsForkedSequentialChild(t *testing.T) {
+	env, engine, blocks, _ := balBlocks(t)
+	cfg := DefaultConfig()
+	cfg.BALStateReconstruction = true
+	db := rawdb.NewMemoryDatabase()
+	bc, err := NewBlockChain(db, env.gspec, engine, cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer bc.Stop()
+	for _, block := range blocks {
+		rawdb.WriteSkeletonHeader(db, block.Header())
+	}
+	bc.SetFinalized(blocks[len(blocks)-1].Header())
+	if !bc.useAccessListReconstruction(blocks[0], vm.Config{}) {
+		t.Fatal("initial finalized ancestry unavailable")
+	}
+	forkHeader := blocks[1].Header()
+	forkHeader.Extra = []byte("alternate child of verified ancestor")
+	forkedChild := blocks[1].WithSeal(forkHeader)
+	if forkedChild.ParentHash() != blocks[0].Hash() || forkedChild.Hash() == blocks[1].Hash() {
+		t.Fatal("invalid forked-child fixture")
+	}
+	if bc.useAccessListReconstruction(forkedChild, vm.Config{}) {
+		t.Fatal("forked child accepted from parent membership without finalized-child hash")
+	}
+	if !bc.useAccessListReconstruction(blocks[1], vm.Config{}) {
+		t.Fatal("genuine finalized child not accepted")
+	}
+}
