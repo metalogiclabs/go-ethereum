@@ -42,3 +42,17 @@ jobs:
           fi
           grep -q -- '--- FAIL: TestBALReconstructionFinalityAncestry' /tmp/finality.log
           grep -q 'non-finalized sibling treated as finalized' /tmp/finality.log
+      - name: Verify competing block is not executionlessly imported
+        run: |
+          cd ../reconstruction-candidate
+          set +e
+          go test ./core -run '^TestBALReconstructionFinalityForkImport$' -count=1 -v >/tmp/fork-import.log 2>&1
+          code=$?
+          set -e
+          cat /tmp/fork-import.log
+          if [ "$code" -eq 0 ]; then
+            echo 'Full import path correctly executes competing block' >&2
+            exit 1
+          fi
+          grep -q -- '--- FAIL: TestBALReconstructionFinalityForkImport' /tmp/fork-import.log
+          grep -q 'unfinalized competing block bypassed execution' /tmp/fork-import.log
