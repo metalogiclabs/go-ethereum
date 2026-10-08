@@ -1,0 +1,44 @@
+name: BAL Finality Ancestry Probe
+
+on:
+  push:
+    branches:
+      - bal-finality-ancestry-probe-v1
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  reproduce:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.27'
+          cache: false
+      - name: Fetch exact upstream reconstruction candidate
+        run: |
+          git fetch --no-tags --depth=1 https://github.com/ethereum/go-ethereum.git 6e58478e99c3204f447817cac31e595c51b7d7f4
+          git worktree add --detach ../reconstruction-candidate FETCH_HEAD
+          cp core/bal_finality_ancestry_probe_test.go ../reconstruction-candidate/core/
+          cd ../reconstruction-candidate
+          test "$(git rev-parse HEAD)" = 6e58478e99c3204f447817cac31e595c51b7d7f4
+          gofmt -d core/bal_finality_ancestry_probe_test.go | tee /tmp/bal-finality-format.diff
+          test ! -s /tmp/bal-finality-format.diff
+      - name: Verify finalized anchor eligible and fork ineligible
+        run: |
+          cd ../reconstruction-candidate
+          set +e
+          go test ./core -run '^TestBALReconstructionFinalityAncestry$' -count=1 -v >/tmp/finality.log 2>&1
+          code=$?
+          set -e
+          cat /tmp/finality.log
+          if [ "$code" -eq 0 ]; then
+            echo 'Finality ancestry guard already works: proposal rejected' >&2
+            exit 1
+          fi
+          grep -q -- '--- FAIL: TestBALReconstructionFinalityAncestry' /tmp/finality.log
+          grep -q 'non-finalized sibling treated as finalized' /tmp/finality.log
