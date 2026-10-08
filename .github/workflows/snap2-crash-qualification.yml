@@ -26,7 +26,26 @@ jobs:
         run: |
           gofmt -d eth/protocols/snap/syncv2.go eth/protocols/snap/syncv2_commit_test.go | tee /tmp/gofmt.diff
           test ! -s /tmp/gofmt.diff
-      - name: Run regression
-        run: go test ./eth/protocols/snap -run TestCatchUpCommittedWriteErrorPreservesJournal -count=1 -v
+      - name: Verify regression fails on exact pre-fix baseline
+        run: |
+          git fetch --no-tags --depth=1 origin 21f1eb2fa356ae35561326ae8d14fbe7c577f004
+          git worktree add --detach ../snap2-baseline FETCH_HEAD
+          cp eth/protocols/snap/syncv2_commit_test.go ../snap2-baseline/eth/protocols/snap/syncv2_commit_test.go
+          (
+            cd ../snap2-baseline
+            set +e
+            go test ./eth/protocols/snap -run '^TestCatchUpCommittedWriteErrorPreservesJournal$' -count=1 -v > /tmp/snap2-baseline.log 2>&1
+            result=$?
+            set -e
+            cat /tmp/snap2-baseline.log
+            if [ "$result" -eq 0 ]; then
+              echo 'Unexpected baseline pass: regression not demonstrated' >&2
+              exit 1
+            fi
+            grep -q -- '--- FAIL: TestCatchUpCommittedWriteErrorPreservesJournal' /tmp/snap2-baseline.log
+            grep -q 'restart sync failed' /tmp/snap2-baseline.log
+          )
+      - name: Run regression on fix
+        run: go test ./eth/protocols/snap -run '^TestCatchUpCommittedWriteErrorPreservesJournal$' -count=1 -v
       - name: Run full snap package
         run: go test ./eth/protocols/snap -count=1
