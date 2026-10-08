@@ -4005,3 +4005,173 @@ func testShortAccountResponseKeepsSuspendedStorage(t *testing.T, scheme string) 
 		}
 	}
 }
+
+
+// failWriteDatabase injects one failed batch commit while leaving all direct
+// database writes untouched. This models a crash/error at catch-up's durable
+// state+pivot commit boundary.
+type failWriteDatabase struct {
+	ethdb.Database
+	failNext atomic.Bool
+}
+
+func (db *failWriteDatabase) NewBatch() ethdb.Batch {
+	return &failWriteBatch{Batch: db.Database.NewBatch(), db: db}
+}
+
+func (db *failWriteDatabase) NewBatchWithSize(size int) ethdb.Batch {
+	return &failWriteBatch{Batch: db.Database.NewBatchWithSize(size), db: db}
+}
+
+type failWriteBatch struct {
+	ethdb.Batch
+	db *failWriteDatabase
+}
+
+func (b *failWriteBatch) Write() error {
+	if b.db.failNext.CompareAndSwap(true, false) {
+		return errors.New("injected catch-up batch write failure")
+	}
+	return b.Batch.Write()
+}
+
+// TestCatchUpWriteFailureDoesNotAdvancePivot exercises the exact durable
+// boundary that catch-up relies on: the state transition and next pivot are
+// staged in one batch, and the in-memory pivot may advance only after that
+// batch commits. A failed Write must therefore leave both durable state and
+// the persisted pivot at the previous block, and a fresh syncer must be able
+// to retry the BAL and converge to the canonical target root.
+func TestCatchUpWriteFailureDoesNotAdvancePivot(t *testing.T) {
+	for _, scheme := range []string{rawdb.HashScheme, rawdb.PathScheme} {
+		t.Run(scheme, func(t *testing.T) {
+			nodeScheme, sourceAccountTrie, elems, addrs := makeAccountTrieWithAddresses(100, scheme)
+			rootA := sourceAccountTrie.Hash()
+			numA := uint64(100)
+			targetAddr := addrs[0]
+			targetHash := crypto.Keccak256Hash(targetAddr[:])
+
+			db := rawdb.NewMemoryDatabase()
+			emptyHash := common.Hash{}
+			zero := uint64(0)
+
+			pivotA := &types.Header{
+				Number: new(big.Int).SetUint64(numA), Root: rootA, Difficulty: common.Big0,
+				BaseFee: common.Big0, WithdrawalsHash: &emptyHash,
+				BlobGasUsed: &zero, ExcessBlobGas: &zero,
+				ParentBeaconRoot: &emptyHash, RequestsHash: &emptyHash,
+			}
+			rawdb.WriteHeader(db, pivotA)
+			rawdb.WriteCanonicalHash(db, pivotA.Hash(), numA)
+
+			// Build one valid post-pivot BAL and the canonical target root.
+			const targetBalance = uint64(4242)
+			cb := bal.NewConstructionBlockAccessList()
+			cb.BalanceChange(0, targetAddr, uint256.NewInt(targetBalance))
+			var buf bytes.Buffer
+			if err := cb.EncodeRLP(&buf); err != nil {
+				t.Fatal(err)
+			}
+			var decoded bal.BlockAccessList
+			if err := rlp.DecodeBytes(buf.Bytes(), &decoded); err != nil {
+				t.Fatal(err)
+			}
+			balHash := decoded.Hash()
+			targetElems := withLeafBalance(t, elems, targetHash, targetBalance)
+			pivotB := &types.Header{
+				ParentHash: pivotA.Hash(), Root: accountTrieRoot(targetElems),
+				Number: new(big.Int).SetUint64(numA + 1), Difficulty: common.Big0,
+				BaseFee: common.Big0, WithdrawalsHash: &emptyHash,
+				BlobGasUsed: &zero, ExcessBlobGas: &zero,
+				ParentBeaconRoot: &emptyHash, RequestsHash: &emptyHash,
+				BlockAccessListHash: &balHash,
+			}
+			rawdb.WriteHeader(db, pivotB)
+			rawdb.WriteCanonicalHash(db, pivotB.Hash(), numA+1)
+			bals := map[common.Hash]rlp.RawValue{pivotB.Hash(): bytes.Clone(buf.Bytes())}
+
+			// Seed a complete sync at A.
+			{
+				var (
+					once   sync.Once
+					cancel = make(chan struct{})
+					term   = func() { once.Do(func() { close(cancel) }) }
+				)
+				syncer := newSyncerV2(db, nodeScheme)
+				src := newTestPeerV2("seed", t, term)
+				src.accountTrie = sourceAccountTrie.Copy()
+				src.accountValues = elems
+				syncer.Register(src)
+				src.remote = syncer
+				if err := syncer.Sync(pivotA, cancel); err != nil {
+					t.Fatalf("seed sync failed: %v", err)
+				}
+			}
+			before := bytes.Clone(rawdb.ReadAccountSnapshot(db, targetHash))
+
+			// Fail the first durable catch-up batch commit.
+			faildb := &failWriteDatabase{Database: db}
+			faildb.failNext.Store(true)
+			{
+				var (
+					once   sync.Once
+					cancel = make(chan struct{})
+					term   = func() { once.Do(func() { close(cancel) }) }
+				)
+				syncer := newSyncerV2(faildb, nodeScheme)
+				src := newTestPeerV2("fault", t, term)
+				src.accountTrie = sourceAccountTrie.Copy()
+				src.accountValues = elems
+				src.accessLists = bals
+				syncer.Register(src)
+				src.remote = syncer
+				if err := syncer.Sync(pivotB, cancel); err == nil {
+					t.Fatal("expected injected batch write failure")
+				}
+			}
+
+			// Neither state nor checkpoint may move past A.
+			loader := newSyncerV2(db, nodeScheme)
+			loader.loadSyncStatus()
+			if loader.pivot == nil || loader.pivot.Hash() != pivotA.Hash() {
+				t.Fatalf("persisted pivot advanced across failed batch: got %v, want %v", loader.pivot, pivotA.Hash())
+			}
+			if after := rawdb.ReadAccountSnapshot(db, targetHash); !bytes.Equal(after, before) {
+				t.Fatalf("flat state changed across failed batch")
+			}
+			verifyTrie(scheme, db, pivotA.Root, t)
+
+			// A fresh process must be able to retry the same BAL and converge.
+			{
+				var (
+					once   sync.Once
+					cancel = make(chan struct{})
+					term   = func() { once.Do(func() { close(cancel) }) }
+				)
+				syncer := newSyncerV2(db, nodeScheme)
+				src := newTestPeerV2("retry", t, term)
+				src.accountTrie = sourceAccountTrie.Copy()
+				src.accountValues = elems
+				src.accessLists = bals
+				syncer.Register(src)
+				src.remote = syncer
+				if err := syncer.Sync(pivotB, cancel); err != nil {
+					t.Fatalf("retry after failed batch did not converge: %v", err)
+				}
+			}
+			loader = newSyncerV2(db, nodeScheme)
+			loader.loadSyncStatus()
+			if loader.pivot == nil || loader.pivot.Hash() != pivotB.Hash() {
+				t.Fatalf("retry did not persist target pivot")
+			}
+			data := rawdb.ReadAccountSnapshot(db, targetHash)
+			account, err := types.FullAccount(data)
+			if err != nil {
+				t.Fatalf("decode target account: %v", err)
+			}
+			if account.Balance.Uint64() != targetBalance {
+				t.Fatalf("target balance = %d, want %d", account.Balance.Uint64(), targetBalance)
+			}
+			verifyTrie(scheme, db, pivotB.Root, t)
+		})
+	}
+}
