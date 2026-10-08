@@ -1,0 +1,29 @@
+name: BAL Multiwindow Import Qualification
+
+on:
+  push:
+    branches:
+      - bal-finality-multiwindow-import-v1
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  differential:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.27'
+          cache: false
+      - name: Formatting
+        run: |
+          gofmt -d core/bal_finality_multiwindow_test.go | tee /tmp/fmt.diff
+          test ! -s /tmp/fmt.diff
+      - name: Real cross-window import differential
+        run: go test ./core -run '^TestBALFinalityMultiwindowInsertChain$' -count=1 -v
+      - name: Full core tests
+        run: go test ./core -count=1
