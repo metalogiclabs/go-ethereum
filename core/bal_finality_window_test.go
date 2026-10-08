@@ -35,9 +35,9 @@ func finalityWindowFixture(t *testing.T, depth uint64) (*BlockChain, []*types.Bl
 	for n := uint64(1); n <= depth; n++ {
 		header := &types.Header{
 			ParentHash: parent,
-			Number: new(big.Int).SetUint64(n),
+			Number:     new(big.Int).SetUint64(n),
 			Difficulty: common.Big0,
-			Time: n + 1000,
+			Time:       n + 1000,
 		}
 		block := types.NewBlockWithHeader(header).WithAccessListUnsafe(empty)
 		rawdb.WriteSkeletonHeader(db, header)
