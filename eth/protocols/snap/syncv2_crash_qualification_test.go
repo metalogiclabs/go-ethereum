@@ -77,10 +77,24 @@ func (db *faultBatchDB) NewBatchWithSize(size int) ethdb.Batch {
 
 type faultBatch struct {
 	ethdb.Batch
-	db *faultBatchDB
+	db            *faultBatchDB
+	hasSyncStatus bool
+}
+
+func (b *faultBatch) Put(key, value []byte) error {
+	if bytes.Equal(key, []byte("SnapshotSyncStatus")) {
+		b.hasSyncStatus = true
+	}
+	return b.Batch.Put(key, value)
 }
 
 func (b *faultBatch) Write() error {
+	// Catch-up's atomic commit is the batch that contains both the state
+	// transition and its next-pivot journal. Ignore unrelated maintenance
+	// batches (notably pruneStaleState) so the fault lands on that boundary.
+	if !b.hasSyncStatus {
+		return b.Batch.Write()
+	}
 	switch b.db.takeFault() {
 	case batchFaultPanicBeforeWrite:
 		panic("injected crash before batch write")
