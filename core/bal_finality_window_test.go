@@ -69,7 +69,7 @@ func TestBALFinalityWindowRejectsForkedChild(t *testing.T) {
 
 func TestBALFinalityWindowCrossesCheckpointsAndRevokes(t *testing.T) {
 	bc, blocks := finalityWindowFixture(t, 520)
-	for _, n := range []uint64{1, 2, 255, 256, 257, 300, 511, 512, 513, 520} {
+	for _, n := range []uint64{1, 2, 255, 256, 257, 300} {
 		if !bc.useAccessListReconstruction(blocks[n-1], vm.Config{}) {
 			t.Fatalf("verified member %d rejected", n)
 		}
@@ -84,6 +84,13 @@ func TestBALFinalityWindowCrossesCheckpointsAndRevokes(t *testing.T) {
 	}
 	if bc.useAccessListReconstruction(blocks[299].WithSeal(bad), vm.Config{}) {
 		t.Fatal("incorrect sibling promoted from active window")
+	}
+	// The next window has a distinct verified checkpoint. Its headers remain
+	// available even though the previous window was mutated on disk.
+	for _, n := range []uint64{511, 512, 513, 520} {
+		if !bc.useAccessListReconstruction(blocks[n-1], vm.Config{}) {
+			t.Fatalf("verified member %d rejected after checkpoint transition", n)
+		}
 	}
 	newFinal := blocks[519].Header()
 	newFinal.Extra = []byte("new finality anchor")
