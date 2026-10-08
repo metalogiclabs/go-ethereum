@@ -356,6 +356,7 @@ type BlockChain struct {
 	currentBlock      atomic.Pointer[types.Header] // Current head of the chain
 	currentSnapBlock  atomic.Pointer[types.Header] // Current head of snap-sync
 	currentFinalBlock atomic.Pointer[types.Header] // Latest (consensus) finalized block
+	balFinalityProof  finalizedBALProof             // Bounded in-memory proof for sequential BAL reconstruction
 	currentSafeBlock  atomic.Pointer[types.Header] // Latest (consensus) safe block
 	historyPrunePoint atomic.Pointer[history.PrunePoint]
 
