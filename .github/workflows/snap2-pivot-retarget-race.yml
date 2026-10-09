@@ -1,0 +1,49 @@
+name: Snap2 Pivot Retarget Race Qualification
+
+on:
+  push:
+    branches:
+      - snap2-pivot-retarget-race-v1
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  pivot-qualification:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.27'
+          cache: false
+      - name: Formatting
+        run: |
+          gofmt -d eth/downloader/downloader.go eth/downloader/pivot_retarget_order_test.go | tee /tmp/fmt.diff
+          test ! -s /tmp/fmt.diff
+      - name: Qualify red pre-fix ordering on exact upstream master
+        run: |
+          git fetch --no-tags --depth=1 origin d4e25dddf2a474774a5f06fab020c0891fd99ff5
+          git worktree add --detach ../pivot-baseline FETCH_HEAD
+          cp eth/downloader/pivot_retarget_order_test.go ../pivot-baseline/eth/downloader/pivot_retarget_order_test.go
+          (
+            cd ../pivot-baseline
+            set +e
+            go test ./eth/downloader -run '^TestSnapPivotRetargetCommitOrder$' -count=1 -v >/tmp/pivot-baseline.log 2>&1
+            result=$?
+            set -e
+            cat /tmp/pivot-baseline.log
+            test "$result" -ne 0
+            grep -q -- '--- FAIL: TestSnapPivotRetargetCommitOrder' /tmp/pivot-baseline.log
+            grep -q 'snap/2 retarget starts at' /tmp/pivot-baseline.log
+          )
+      - name: Qualified pivot-retarget ordering
+        run: go test ./eth/downloader -run '^TestSnapPivotRetarget' -count=1 -v
+      - name: Downloader package
+        run: go test ./eth/downloader -count=1
+      - name: Snap package
+        run: go test ./eth/protocols/snap -count=1
+      - name: Focused race
+        run: go test -race ./eth/downloader -run '^TestSnapPivotRetarget' -count=1
