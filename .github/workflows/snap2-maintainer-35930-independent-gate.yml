@@ -87,7 +87,8 @@ jobs:
       - name: Base must fail both discriminating cases by assertion (not compile)
         shell: bash
         run: |
-          set -uo pipefail
+          set +e
+          set -u -o pipefail
           (
             cd baseline
             go test ./eth/protocols/snap -run '^TestMathGraphPivotAncestryIndependent/(SkeletonOnlyMissingCanonical|RealReorgWithStaleCanonicalOldPivot)$' -count=1 -v
