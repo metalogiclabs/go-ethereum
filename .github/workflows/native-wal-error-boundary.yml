@@ -1,0 +1,33 @@
+name: Native Storage Commit Boundary
+
+on:
+  push:
+    branches:
+      - ethdb-native-wal-error-boundary-v1
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  native-store:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.27'
+          cache: false
+      - name: Check native WAL probe formatting
+        run: |
+          gofmt -d ethdb/leveldb/native_wal_ambiguity_test.go | tee /tmp/gofmt.diff
+          test ! -s /tmp/gofmt.diff
+      - name: Exact pinned goleveldb WAL error and recovery
+        run: |
+          go test ./ethdb/leveldb -run '^TestNativeLevelDBReportedErrorAfterJournalBytes$' -count=1 -v
+      - name: Native ethdb LevelDB and Pebble suites
+        run: |
+          go test ./ethdb/leveldb ./ethdb/pebble -count=1
+      - name: Focused race qualification
+        run: go test -race ./ethdb/leveldb -run '^TestNativeLevelDBReportedErrorAfterJournalBytes$' -count=1
