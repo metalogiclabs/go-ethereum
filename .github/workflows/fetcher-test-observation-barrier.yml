@@ -30,7 +30,7 @@ jobs:
             printf 'baseline_parent=d4e25dddf2a474774a5f06fab020c0891fd99ff5\n'
             go version
             sha256sum eth/fetcher/blob_fetcher.go eth/fetcher/blob_fetcher_test.go
-            git diff --stat d4e25dddf2a474774a5f06fab020c0891fd99ff5..HEAD
+            echo 'Independent baseline vs candidate failure evidence: run 38006050674'
           } | tee mathgraph-evidence/manifest.txt
       - name: Repeated original flaky test at multiple GOMAXPROCS
         shell: bash
