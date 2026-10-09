@@ -1,0 +1,47 @@
+name: Snap2 Real Stale Head Retarget Differential
+
+on:
+  push:
+    branches:
+      - snap2-real-stale-head-retarget-v1
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  qualification:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.27'
+          cache: false
+      - name: Formatting
+        run: |
+          gofmt -d eth/downloader/pivot_retarget_actual_stale_test.go | tee /tmp/format.diff
+          test ! -s /tmp/format.diff
+      - name: Red on prior retarget-only PR
+        run: |
+          git fetch --no-tags --depth=1 origin a70b94348e8e1394464483b82d96fce0cbe38a29
+          git worktree add --detach ../retarget-base FETCH_HEAD
+          cp eth/downloader/pivot_retarget_handoff_test.go ../retarget-base/eth/downloader/pivot_retarget_handoff_test.go
+          cp eth/downloader/pivot_retarget_actual_stale_test.go ../retarget-base/eth/downloader/pivot_retarget_actual_stale_test.go
+          (
+            cd ../retarget-base
+            set +e
+            go test ./eth/downloader -run '^TestSnapPivotRetargetRealStaleHeadWaitsForOldPivot$' -count=2 -v >/tmp/real-stale-base.log 2>&1
+            status=$?
+            set -e
+            cat /tmp/real-stale-base.log
+            test "$status" -ne 0
+            grep -q 'missing-old-pivot retarget prematurely saw canonical' /tmp/real-stale-base.log
+          )
+      - name: Actual stale-head selection and delayed old pivot
+        run: go test ./eth/downloader -run '^TestSnapPivotRetargetRealStaleHeadWaitsForOldPivot$' -count=8 -v
+      - name: Race detector on real stale-head fixture
+        run: go test -race ./eth/downloader -run '^TestSnapPivotRetargetRealStaleHeadWaitsForOldPivot$' -count=3
+      - name: Full downloader and snap suites
+        run: go test ./eth/downloader ./eth/protocols/snap -count=1
