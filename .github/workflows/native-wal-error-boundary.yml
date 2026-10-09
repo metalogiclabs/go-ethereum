@@ -12,29 +12,22 @@ permissions:
 jobs:
   native-store:
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
         with:
           go-version: '1.27'
           cache: false
-      - name: Check native WAL probe formatting
+      - name: Go formatting
         run: |
           gofmt -d ethdb/leveldb/native_wal_ambiguity_test.go ethdb/pebble/native_precommit_error_test.go | tee /tmp/gofmt.diff
           test ! -s /tmp/gofmt.diff
-      - name: Exact pinned goleveldb WAL error and recovery
-        run: |
-          go test ./ethdb/leveldb -run '^TestNativeLevelDBReportedErrorAfterJournalBytes$' -count=1 -v
-      - name: Native Pebble pre-commit control
-        run: go test ./ethdb/pebble -run '^TestNativePebbleReadOnlyWriteErrorDoesNotAdvanceState
-        run: |
-          go test ./ethdb/leveldb ./ethdb/pebble -count=1
-      - name: Focused race qualification
-        run: go test -race ./ethdb/leveldb -run '^TestNativeLevelDBReportedErrorAfterJournalBytes$' -count=1
- -count=1 -v
-      - name: Native ethdb LevelDB and Pebble suites
-        run: |
-          go test ./ethdb/leveldb ./ethdb/pebble -count=1
-      - name: Focused race qualification
-        run: go test -race ./ethdb/leveldb -run '^TestNativeLevelDBReportedErrorAfterJournalBytes$' -count=1
+      - name: LevelDB journal return-error and replay
+        run: go test ./ethdb/leveldb -run '^TestNativeLevelDBReportedErrorAfter' -count=1 -v
+      - name: Pebble pre-commit read-only control
+        run: go test ./ethdb/pebble -run '^TestNativePebbleReadOnlyWriteErrorDoesNotAdvanceState$' -count=1 -v
+      - name: Full LevelDB and Pebble packages
+        run: go test ./ethdb/leveldb ./ethdb/pebble -count=1
+      - name: Focused LevelDB race
+        run: go test -race ./ethdb/leveldb -run '^TestNativeLevelDBReportedErrorAfter' -count=1
