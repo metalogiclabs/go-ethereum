@@ -22,8 +22,9 @@ var errInjectedJournalIO = errors.New("injected I/O error after all journal byte
 // to report an error despite the complete WAL record already being present.
 type journalErrorStorage struct {
 	storage.Storage
-	armed    atomic.Bool
-	injected atomic.Bool
+	armed           atomic.Bool
+	injected        atomic.Bool
+	syncBeforeError bool
 }
 
 func (s *journalErrorStorage) Create(fd storage.FileDesc) (storage.Writer, error) {
@@ -45,6 +46,11 @@ type journalFaultWriter struct {
 func (w *journalFaultWriter) Write(data []byte) (int, error) {
 	n, err := w.Writer.Write(data)
 	if err == nil && n == len(data) && w.store.armed.CompareAndSwap(true, false) {
+		if w.store.syncBeforeError {
+			if syncErr := w.Writer.Sync(); syncErr != nil {
+				return n, syncErr
+			}
+		}
 		w.store.injected.Store(true)
 		return n, errInjectedJournalIO
 	}
@@ -92,6 +98,67 @@ func TestNativeLevelDBReportedErrorAfterJournalBytes(t *testing.T) {
 		actual, err := reopened.Get([]byte(key), nil)
 		if err != nil || string(actual) != want {
 			t.Fatalf("recovered native WAL %s = %q (err %v), want %q", key, actual, err, want)
+		}
+	}
+}
+
+// TestNativeLevelDBReportedErrorAfterSyncedFileJournal qualifies the same
+// native WAL-writer error against actual file-backed storage. The injected
+// journal Write error comes AFTER writing and fsyncing the complete record.
+// Reopening through a new Storage handle must replay the next-pivot journal
+// and corresponding state. This is still injected error behavior: it does
+// not show that ordinary disks spontaneously return this exact outcome.
+func TestNativeLevelDBReportedErrorAfterSyncedFileJournal(t *testing.T) {
+	dir := t.TempDir()
+	realStorage, err := storage.OpenFile(dir, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	faultStore := &journalErrorStorage{Storage: realStorage, syncBeforeError: true}
+	db, err := goleveldb.Open(faultStore, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	b := new(goleveldb.Batch)
+	b.Put([]byte("SnapshotSyncStatus"), []byte("next-pivot"))
+	b.Put([]byte("FlatState"), []byte("new-flat-state"))
+	faultStore.armed.Store(true)
+	if err := db.Write(b, nil); !errors.Is(err, errInjectedJournalIO) {
+		t.Fatalf("file-backed LevelDB.Write: got %v, want injected I/O error", err)
+	}
+	if !faultStore.injected.Load() {
+		t.Fatal("file-backed journal writer was not faulted")
+	}
+	if data, err := db.Get([]byte("SnapshotSyncStatus"), nil); !errors.Is(err, goleveldb.ErrNotFound) {
+		t.Fatalf("live memtable unexpectedly advanced: %q, err %v", data, err)
+	}
+	if err := db.Close(); err != nil {
+		t.Logf("close after file I/O fault: %v", err)
+	}
+	if err := realStorage.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	// Distinct file Storage handle is closer to a process restart and forces
+	// goleveldb to replay the WAL that already passed fsync.
+	nextStorage, err := storage.OpenFile(dir, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer nextStorage.Close()
+	restarted, err := goleveldb.Open(nextStorage, nil)
+	if err != nil {
+		t.Fatalf("reopen synced WAL: %v", err)
+	}
+	defer restarted.Close()
+	for key, want := range map[string]string{
+		"SnapshotSyncStatus": "next-pivot",
+		"FlatState":          "new-flat-state",
+	} {
+		data, err := restarted.Get([]byte(key), nil)
+		if err != nil || string(data) != want {
+			t.Fatalf("recovered %s = %q, err %v, want %q", key, data, err, want)
 		}
 	}
 }
