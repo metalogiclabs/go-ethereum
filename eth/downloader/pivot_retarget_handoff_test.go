@@ -14,9 +14,9 @@ import (
 	"github.com/ethereum/go-ethereum/core"
 	"github.com/ethereum/go-ethereum/core/rawdb"
 	"github.com/ethereum/go-ethereum/core/types"
+	"github.com/ethereum/go-ethereum/eth/protocols/snap"
 	"github.com/ethereum/go-ethereum/params"
 	"github.com/ethereum/go-ethereum/rlp"
-	"github.com/ethereum/go-ethereum/eth/protocols/snap"
 )
 
 // pivotAuditSyncer retains the real snap/2 peer-facing methods while
@@ -66,7 +66,7 @@ func TestSnapPivotRetargetNewStateSyncSeesCanonical(t *testing.T) {
 	d.pivotHeader = previous
 
 	audit := &pivotAuditSyncer{
-		Syncer: d.snapSyncer,
+		Syncer:  d.snapSyncer,
 		oldHash: previous.Hash(), oldNumber: previous.Number.Uint64(),
 		d: d, seen: make(chan common.Hash, 1),
 	}
@@ -83,7 +83,9 @@ func TestSnapPivotRetargetNewStateSyncSeesCanonical(t *testing.T) {
 		result.Withdrawals = block.Withdrawals()
 		var err error
 		result.Receipts, err = rlp.EncodeToBytes(receipts[i])
-		if err != nil { t.Fatal(err) }
+		if err != nil {
+			t.Fatal(err)
+		}
 		result.pending.Store(0)
 		d.queue.resultCache.items[i] = result
 	}
@@ -94,7 +96,9 @@ func TestSnapPivotRetargetNewStateSyncSeesCanonical(t *testing.T) {
 	status, err := json.Marshal(&skeletonProgress{
 		Subchains: []*subchain{{Head: target.Number.Uint64(), Tail: target.Number.Uint64(), Next: target.ParentHash}},
 	})
-	if err != nil { t.Fatal(err) }
+	if err != nil {
+		t.Fatal(err)
+	}
 	rawdb.WriteSkeletonSyncStatus(tester.db, status)
 	d.chainInsertHook = func(results []*fetchResult) { d.pivotHeader = target }
 
