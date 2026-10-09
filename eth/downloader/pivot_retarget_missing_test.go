@@ -60,6 +60,44 @@ func TestSnapPivotRetargetMissingOldPivotIsNotYetSafe(t *testing.T) {
 	result.pending.Store(0)
 	d.queue.resultCache.items[0] = result
 
+	// The old pivot (#2) arrives later than the initial result (#1).
+	// The fixed downloader should keep the first state-sync cycle active
+	// and continue consuming receipt results until #2 is indexed.
+	second := blocks[1]
+	delayed := newFetchResult(second.Header(), true, false)
+	delayed.Transactions = second.Transactions()
+	delayed.Uncles = second.Uncles()
+	delayed.Withdrawals = second.Withdrawals()
+	delayed.Receipts, err = rlp.EncodeToBytes(receipts[1])
+	if err != nil {
+		t.Fatal(err)
+	}
+	delayed.pending.Store(0)
+	ready := make(chan struct{}, 1)
+	delivered := make(chan struct{})
+	go func() {
+		defer close(delivered)
+		select {
+		case <-ready:
+		case <-time.After(8 * time.Second):
+			return
+		}
+		time.Sleep(60 * time.Millisecond)
+		d.queue.resultCache.lock.Lock()
+		d.queue.resultCache.items[0] = delayed
+		d.queue.resultCache.lock.Unlock()
+		d.queue.lock.Lock()
+		d.queue.active.Signal()
+		d.queue.lock.Unlock()
+	}()
+	defer func() {
+		select {
+		case <-delivered:
+		case <-time.After(9 * time.Second):
+			t.Error("delayed pivot result feeder did not exit")
+		}
+	}()
+
 	rawdb.WriteSkeletonHeader(tester.db, target)
 	status, err := json.Marshal(&skeletonProgress{
 		Subchains: []*subchain{{Head: target.Number.Uint64(), Tail: target.Number.Uint64(), Next: target.ParentHash}},
@@ -68,7 +106,13 @@ func TestSnapPivotRetargetMissingOldPivotIsNotYetSafe(t *testing.T) {
 		t.Fatal(err)
 	}
 	rawdb.WriteSkeletonSyncStatus(tester.db, status)
-	d.chainInsertHook = func(_ []*fetchResult) { d.pivotHeader = target }
+	d.chainInsertHook = func(_ []*fetchResult) {
+		d.pivotHeader = target
+		select {
+		case ready <- struct{}{}:
+		default:
+		}
+	}
 
 	done := make(chan error, 1)
 	go func() { done <- d.processSnapSyncContent() }()
