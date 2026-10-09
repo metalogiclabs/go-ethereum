@@ -1,0 +1,77 @@
+name: MathGraph Fetcher Test Observation Barrier Qualification
+
+on:
+  push:
+    branches:
+      - fetcher-test-observation-barrier-v1
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  qualification:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.27'
+          cache: false
+      - name: Seal candidate and formatting
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p mathgraph-evidence
+          test -z "$(gofmt -l eth/fetcher/blob_fetcher.go eth/fetcher/blob_fetcher_test.go)"
+          {
+            printf 'candidate=%s\n' "$(git rev-parse HEAD)"
+            printf 'baseline_parent=d4e25dddf2a474774a5f06fab020c0891fd99ff5\n'
+            go version
+            sha256sum eth/fetcher/blob_fetcher.go eth/fetcher/blob_fetcher_test.go
+            git diff --stat d4e25dddf2a474774a5f06fab020c0891fd99ff5..HEAD
+          } | tee mathgraph-evidence/manifest.txt
+      - name: Repeated original flaky test at multiple GOMAXPROCS
+        shell: bash
+        run: |
+          set -euo pipefail
+          go test ./eth/fetcher -run '^TestBlobFetcherPartialDelivery$' -count=600 -cpu=1,2,4 -timeout=5m -v > mathgraph-evidence/targeted.txt 2>&1 || {
+            tail -100 mathgraph-evidence/targeted.txt
+            exit 1
+          }
+          tail -n 6 mathgraph-evidence/targeted.txt
+      - name: Race-detector repeated original flaky test
+        shell: bash
+        run: |
+          set -euo pipefail
+          go test -race ./eth/fetcher -run '^TestBlobFetcherPartialDelivery$' -count=100 -cpu=2,4 -timeout=5m > mathgraph-evidence/race.txt 2>&1 || {
+            tail -140 mathgraph-evidence/race.txt
+            exit 1
+          }
+          cat mathgraph-evidence/race.txt
+      - name: Full fetcher tests repeated
+        shell: bash
+        run: |
+          set -euo pipefail
+          go test ./eth/fetcher -count=20 -timeout=8m > mathgraph-evidence/package.txt 2>&1 || {
+            tail -100 mathgraph-evidence/package.txt
+            exit 1
+          }
+          cat mathgraph-evidence/package.txt
+      - name: Whole package race qualification
+        shell: bash
+        run: |
+          set -euo pipefail
+          go test -race ./eth/fetcher -count=2 -timeout=8m > mathgraph-evidence/full-race.txt 2>&1 || {
+            tail -140 mathgraph-evidence/full-race.txt
+            exit 1
+          }
+          cat mathgraph-evidence/full-race.txt
+      - name: Retain exact evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fetcher-test-observation-barrier-evidence
+          path: mathgraph-evidence/
+          if-no-files-found: error
