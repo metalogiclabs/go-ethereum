@@ -1,0 +1,56 @@
+name: MathGraph Fresh ERA Index Boundary
+
+on:
+  push:
+    branches:
+      - era-fresh-datadir-index-boundary-v1
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  bounded-negative-control:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.27'
+          cache: false
+      - name: Check diagnostic fixture and pin exact sources
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p mathgraph-evidence
+          test -z "$(gofmt -l core/rawdb/mathgraph_era_boundary_test.go)"
+          {
+            printf 'commit=%s\n' "$(git rev-parse HEAD)"
+            printf 'parent=%s\n' "$(git rev-parse HEAD^)"
+            printf 'go='
+            go version
+            sha256sum core/rawdb/mathgraph_era_boundary_test.go
+            sha256sum core/rawdb/chain_freezer.go core/rawdb/accessors_chain.go core/rawdb/eradb/eradb.go
+            echo 'Test-only fork branch; no production changes or upstream contact.'
+          } | tee mathgraph-evidence/manifest.txt
+      - name: Existing ERA reader positive control
+        shell: bash
+        run: |
+          set -euo pipefail
+          go test ./core/rawdb/eradb -run '^TestEraDatabase$' -count=1 -v | tee mathgraph-evidence/era-reader-positive.txt
+      - name: Fresh directory negative boundary
+        shell: bash
+        run: |
+          set -euo pipefail
+          go test ./core/rawdb -run '^TestMathGraphFreshEraUnindexedBoundary$' -count=3 -v | tee mathgraph-evidence/fresh-index-negative.txt
+          grep -q 'INDEX_BOUNDARY_PRESENT' mathgraph-evidence/fresh-index-negative.txt
+      - name: Store evidence in Metalogic fork
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: era-fresh-datadir-index-boundary
+          path: mathgraph-evidence/
+          if-no-files-found: error
