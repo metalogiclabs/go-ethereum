@@ -23,6 +23,21 @@ jobs:
         run: |
           gofmt -d eth/downloader/pivot_retarget_handoff_test.go | tee /tmp/format.diff
           test ! -s /tmp/format.diff
+      - name: Negative control on unchanged upstream master
+        run: |
+          git fetch --no-tags --depth=1 origin d4e25dddf2a474774a5f06fab020c0891fd99ff5
+          git worktree add --detach ../pivot-unfixed FETCH_HEAD
+          cp eth/downloader/pivot_retarget_handoff_test.go ../pivot-unfixed/eth/downloader/pivot_retarget_handoff_test.go
+          (
+            cd ../pivot-unfixed
+            set +e
+            go test ./eth/downloader -run '^TestSnapPivotRetargetNewStateSyncSeesCanonical$' -count=8 -v > /tmp/pivot-handoff-unfixed.log 2>&1
+            result=$?
+            set -e
+            cat /tmp/pivot-handoff-unfixed.log
+            test "$result" -ne 0
+            grep -q 'new snap/2 sync saw canonical old pivot' /tmp/pivot-handoff-unfixed.log
+          )
       - name: Repeated real goroutine handoff
         run: go test ./eth/downloader -run '^TestSnapPivotRetargetNewStateSyncSeesCanonical$' -count=25 -v
       - name: Repeated handoff under race detector
