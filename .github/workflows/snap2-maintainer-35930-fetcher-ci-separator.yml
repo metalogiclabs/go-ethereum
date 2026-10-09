@@ -1,0 +1,69 @@
+name: MathGraph Snap2 Maintainer Fetcher CI Separator
+
+on:
+  push:
+    branches:
+      - snap2-maintainer-35930-fetcher-ci-separator-v1
+
+permissions:
+  contents: read
+
+jobs:
+  separator:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - name: Checkout exact baseline
+        uses: actions/checkout@v4
+        with:
+          repository: ethereum/go-ethereum
+          ref: d4e25dddf2a474774a5f06fab020c0891fd99ff5
+          path: baseline
+          persist-credentials: false
+      - name: Checkout exact maintainer fix
+        uses: actions/checkout@v4
+        with:
+          repository: jrhea/go-ethereum
+          ref: 03bc8e78381f80c06cb247277a2962b0d170d13c
+          path: candidate
+          persist-credentials: false
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.27.2'
+          cache: false
+      - name: Verify fetcher tree identical and seal hashes
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p logs
+          base_tree="$(git -C baseline rev-parse HEAD:eth/fetcher)"
+          candidate_tree="$(git -C candidate rev-parse HEAD:eth/fetcher)"
+          {
+            printf 'baseline=%s\n' "$(git -C baseline rev-parse HEAD)"
+            printf 'candidate=%s\n' "$(git -C candidate rev-parse HEAD)"
+            printf 'baseline_eth_fetcher_tree=%s\n' "$base_tree"
+            printf 'candidate_eth_fetcher_tree=%s\n' "$candidate_tree"
+            sha256sum baseline/eth/fetcher/blob_fetcher_test.go candidate/eth/fetcher/blob_fetcher_test.go
+            go version
+          } | tee logs/manifest.txt
+          test "$(git -C baseline rev-parse HEAD)" = 'd4e25dddf2a474774a5f06fab020c0891fd99ff5'
+          test "$(git -C candidate rev-parse HEAD)" = '03bc8e78381f80c06cb247277a2962b0d170d13c'
+          test "$base_tree" = "$candidate_tree"
+      - name: Reproduce upstream failing test on exact baseline
+        shell: bash
+        run: |
+          set -euo pipefail
+          (cd baseline && go test ./eth/fetcher -run '^TestBlobFetcherPartialDelivery$' -count=25 -v) | tee logs/baseline-fetcher.txt
+      - name: Reproduce upstream failing test on exact candidate
+        shell: bash
+        run: |
+          set -euo pipefail
+          (cd candidate && go test ./eth/fetcher -run '^TestBlobFetcherPartialDelivery$' -count=25 -v) | tee logs/candidate-fetcher.txt
+      - name: Upload read-only, pinned separator evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: snap2-upstream-fetcher-ci-separator
+          path: logs/
+          if-no-files-found: error
