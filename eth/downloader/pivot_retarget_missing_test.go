@@ -36,7 +36,7 @@ func TestSnapPivotRetargetMissingOldPivotIsNotYetSafe(t *testing.T) {
 	d.pivotHeader = previous
 
 	audit := &pivotAuditSyncer{
-		Syncer: d.snapSyncer,
+		Syncer:  d.snapSyncer,
 		oldHash: previous.Hash(), oldNumber: previous.Number.Uint64(),
 		d: d, seen: make(chan common.Hash, 1), started: make(chan struct{}),
 	}
