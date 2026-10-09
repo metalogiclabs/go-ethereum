@@ -1,0 +1,36 @@
+name: Snap2 Missing Previous Pivot Separator
+
+on:
+  push:
+    branches:
+      - snap2-retarget-missing-pivot-audit-v1
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.27'
+          cache: false
+      - name: Formatting
+        run: |
+          gofmt -d eth/downloader/pivot_retarget_missing_test.go | tee /tmp/gofmt.diff
+          test ! -s /tmp/gofmt.diff
+      - name: Exact residual missing old pivot
+        run: |
+          set +e
+          go test ./eth/downloader -run '^TestSnapPivotRetargetMissingOldPivotIsNotYetSafe$' -count=8 -v > /tmp/missing-pivot.log 2>&1
+          result=$?
+          set -e
+          cat /tmp/missing-pivot.log
+          test "$result" -ne 0
+          grep -q 'missing-old-pivot retarget prematurely saw canonical' /tmp/missing-pivot.log
+      - name: Positive control with old pivot available
+        run: go test ./eth/downloader -run '^TestSnapPivotRetargetNewStateSyncSeesCanonical$' -count=10
