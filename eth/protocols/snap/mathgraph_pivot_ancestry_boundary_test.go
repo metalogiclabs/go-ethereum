@@ -17,9 +17,8 @@ import (
 	"github.com/ethereum/go-ethereum/ethdb"
 )
 
-// mathgraphPivotReorged is supplied by the qualification workflow, separately
-// for the old function and the new method. No production file is patched.
-func mathgraphPivotReorged(db ethdb.Database, prev, next *types.Header) bool
+// mathgraphPivotReorged is supplied by a separate test-only version adapter.
+// No production code is patched, and both revisions share these expectations.
 
 func mgBoundaryHeader(number uint64, parent common.Hash, root byte) *types.Header {
 	return &types.Header{
