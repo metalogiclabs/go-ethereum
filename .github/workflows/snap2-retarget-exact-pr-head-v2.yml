@@ -1,0 +1,43 @@
+name: Snap2 Retarget Exact Upstream PR Head Qualification
+
+on:
+  push:
+    branches:
+      - snap2-retarget-exact-pr-head-qualification-v2
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  qualified:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: 114047426d5baacc1f0f322f495fe65a0b2fe188
+          submodules: false
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.27'
+          cache: false
+      - name: Verify exact PR authority and source blob
+        run: |
+          test "$(git rev-parse HEAD)" = "114047426d5baacc1f0f322f495fe65a0b2fe188"
+          test "$(git rev-parse HEAD:eth/downloader/downloader.go)" = "6a9f8d0bf3a965857b2398f8e3774e35fd177fb0"
+          git diff --exit-code
+      - name: Overlay independently qualified diagnostics only
+        run: |
+          git fetch --no-tags --depth=1 origin 295b0bae88ac60c85807b802defcc0c4d395a542
+          git show FETCH_HEAD:eth/downloader/pivot_retarget_handoff_test.go > eth/downloader/pivot_retarget_handoff_test.go
+          git show FETCH_HEAD:eth/downloader/pivot_retarget_missing_test.go > eth/downloader/pivot_retarget_missing_test.go
+          gofmt -d eth/downloader/pivot_retarget_handoff_test.go eth/downloader/pivot_retarget_missing_test.go | tee /tmp/fmt.diff
+          test ! -s /tmp/fmt.diff
+          test "$(git rev-parse HEAD:eth/downloader/downloader.go)" = "6a9f8d0bf3a965857b2398f8e3774e35fd177fb0"
+      - name: Exact-head causal cases
+        run: go test ./eth/downloader -run '^TestSnapPivotRetarget' -count=10
+      - name: Exact-head focused race
+        run: go test -race ./eth/downloader -run '^TestSnapPivotRetarget' -count=3
+      - name: Exact-head full downloader and snap suites
+        run: go test ./eth/downloader ./eth/protocols/snap -count=1
