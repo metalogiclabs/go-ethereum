@@ -1,0 +1,49 @@
+name: Snap2 Delayed Old-Pivot Retarget Qualification
+
+on:
+  push:
+    branches:
+      - snap2-retarget-await-old-pivot-v1
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  qualification:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.27'
+          cache: false
+      - name: Formatting
+        run: |
+          gofmt -d eth/downloader/downloader.go eth/downloader/pivot_retarget_missing_test.go eth/downloader/pivot_retarget_handoff_test.go | tee /tmp/fmt.diff
+          test ! -s /tmp/fmt.diff
+      - name: Negative control on current upstream PR 35929
+        run: |
+          git fetch --no-tags --depth=1 origin a70b94348e8e1394464483b82d96fce0cbe38a29
+          git worktree add --detach ../retarget-previous-pr FETCH_HEAD
+          cp eth/downloader/pivot_retarget_handoff_test.go ../retarget-previous-pr/eth/downloader/pivot_retarget_handoff_test.go
+          cp eth/downloader/pivot_retarget_missing_test.go ../retarget-previous-pr/eth/downloader/pivot_retarget_missing_test.go
+          (
+            cd ../retarget-previous-pr
+            set +e
+            go test ./eth/downloader -run '^TestSnapPivotRetargetMissingOldPivotIsNotYetSafe$' -count=5 -v > /tmp/missing-prev-pr.log 2>&1
+            result=$?
+            set -e
+            cat /tmp/missing-prev-pr.log
+            test "$result" -ne 0
+            grep -q 'missing-old-pivot retarget prematurely saw canonical' /tmp/missing-prev-pr.log
+          )
+      - name: Both causal retarget cases
+        run: |
+          go test ./eth/downloader -run '^TestSnapPivotRetarget(NewStateSyncSeesCanonical|MissingOldPivotIsNotYetSafe|ReceiptCommitWritesCanonical)$' -count=10 -v
+      - name: Focused race qualification
+        run: |
+          go test -race ./eth/downloader -run '^TestSnapPivotRetarget(NewStateSyncSeesCanonical|MissingOldPivotIsNotYetSafe|ReceiptCommitWritesCanonical)$' -count=5
+      - name: Full downloader and snap packages
+        run: go test ./eth/downloader ./eth/protocols/snap -count=1
