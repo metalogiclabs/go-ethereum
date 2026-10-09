@@ -21,7 +21,7 @@ jobs:
           cache: false
       - name: Formatting
         run: |
-          gofmt -d eth/downloader/downloader.go eth/downloader/pivot_retarget_order_test.go | tee /tmp/fmt.diff
+          gofmt -d eth/downloader/downloader.go eth/downloader/pivot_retarget_order_test.go eth/downloader/pivot_retarget_commit_test.go | tee /tmp/fmt.diff
           test ! -s /tmp/fmt.diff
       - name: Qualify red pre-fix ordering on exact upstream master
         run: |
