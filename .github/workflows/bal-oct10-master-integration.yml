@@ -1,0 +1,50 @@
+name: BAL Reconstruction October 10 Master Gate
+
+on:
+  push:
+    branches:
+      - bal-oct10-master-integration-gate-v1
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  integrate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: bac554336fb0cda766d2ab59afa846dd500f0cb1
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.27'
+          cache: false
+      - name: Merge the verified BAL branch onto exact latest upstream master
+        run: |
+          git fetch --no-tags --depth=128 origin bac554336fb0cda766d2ab59afa846dd500f0cb1
+          git fetch --no-tags --depth=128 https://github.com/ethereum/go-ethereum.git d4e25dddf2a474774a5f06fab020c0891fd99ff5
+          git worktree add --detach ../geth-new-master FETCH_HEAD
+          cd ../geth-new-master
+          git -c user.name='Metalogic CI' -c user.email='ci@metalogiclabs.xyz' merge --no-commit --no-ff bac554336fb0cda766d2ab59afa846dd500f0cb1
+          test -z "$(git diff --name-only --diff-filter=U)"
+          git diff --check
+      - name: Focused finalized ancestry and real 260-block differential
+        run: |
+          cd ../geth-new-master
+          go test ./core -run '^(TestBALFinalityWindow|TestBALFinalityMultiwindowInsertChain|TestBALReconstruction|TestInsertChainReconstructsFinalizedState)$' -count=1 -v
+      - name: Full core suite
+        run: |
+          cd ../geth-new-master
+          go test ./core -count=1
+      - name: CLI and backend compilation
+        run: |
+          cd ../geth-new-master
+          go test ./eth ./cmd/utils -run '^$' -count=1
+      - name: Publish updated current-master integration
+        run: |
+          cd ../geth-new-master
+          git -c user.name='Metalogic CI' -c user.email='ci@metalogiclabs.xyz' commit -m 'core: bring verified finalized BAL reconstruction onto October 10 upstream master'
+          test "$(git rev-parse HEAD^1)" = d4e25dddf2a474774a5f06fab020c0891fd99ff5
+          git push origin HEAD:refs/heads/bal-oct10-master-integrated-v1
