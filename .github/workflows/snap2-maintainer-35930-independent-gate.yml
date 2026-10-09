@@ -1,0 +1,134 @@
+name: MathGraph Independent Snap2 Pivot Ancestry Gate
+
+on:
+  push:
+    branches:
+      - snap2-maintainer-35930-independent-gate-v1
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  differential:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Checkout independent fixture (Metalogic fork only)
+        uses: actions/checkout@v4
+        with:
+          path: evidence
+          persist-credentials: false
+      - name: Checkout exact unfixed upstream parent
+        uses: actions/checkout@v4
+        with:
+          repository: ethereum/go-ethereum
+          ref: d4e25dddf2a474774a5f06fab020c0891fd99ff5
+          path: baseline
+          persist-credentials: false
+      - name: Checkout exact maintainer candidate
+        uses: actions/checkout@v4
+        with:
+          repository: jrhea/go-ethereum
+          ref: 03bc8e78381f80c06cb247277a2962b0d170d13c
+          path: candidate
+          persist-credentials: false
+      - name: Setup pinned Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.27'
+          cache: false
+      - name: Seal source identity and install independent test adapters
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git -C baseline rev-parse HEAD)" = 'd4e25dddf2a474774a5f06fab020c0891fd99ff5'
+          test "$(git -C candidate rev-parse HEAD)" = '03bc8e78381f80c06cb247277a2962b0d170d13c'
+          mkdir -p evidence/logs
+          {
+            printf 'baseline=%s\n' "$(git -C baseline rev-parse HEAD)"
+            printf 'candidate=%s\n' "$(git -C candidate rev-parse HEAD)"
+            printf 'fixture_branch=%s\n' "$(git -C evidence rev-parse HEAD)"
+            go version
+            sha256sum evidence/eth/protocols/snap/mathgraph_pivot_ancestry_boundary_test.go
+            echo 'Production source files not modified; only copied test fixtures and adapters.'
+          } | tee evidence/logs/manifest.txt
+          cp evidence/eth/protocols/snap/mathgraph_pivot_ancestry_boundary_test.go baseline/eth/protocols/snap/
+          cp evidence/eth/protocols/snap/mathgraph_pivot_ancestry_boundary_test.go candidate/eth/protocols/snap/
+          cat > baseline/eth/protocols/snap/mathgraph_pivot_adapter_test.go <<'EOF'
+          package snap
+
+          import (
+              "github.com/ethereum/go-ethereum/core/types"
+              "github.com/ethereum/go-ethereum/ethdb"
+          )
+
+          func mathgraphPivotReorged(db ethdb.Database, prev, next *types.Header) bool {
+              return isPivotReorged(db, prev, next)
+          }
+          EOF
+          cat > candidate/eth/protocols/snap/mathgraph_pivot_adapter_test.go <<'EOF'
+          package snap
+
+          import (
+              "github.com/ethereum/go-ethereum/core/rawdb"
+              "github.com/ethereum/go-ethereum/core/types"
+              "github.com/ethereum/go-ethereum/ethdb"
+          )
+
+          func mathgraphPivotReorged(db ethdb.Database, prev, next *types.Header) bool {
+              return newSyncerV2(db, rawdb.HashScheme).isPivotReorged(prev, next)
+          }
+          EOF
+          gofmt -w baseline/eth/protocols/snap/mathgraph_pivot_adapter_test.go candidate/eth/protocols/snap/mathgraph_pivot_adapter_test.go
+          test -z "$(gofmt -l evidence/eth/protocols/snap/mathgraph_pivot_ancestry_boundary_test.go)"
+          cmp baseline/eth/protocols/snap/mathgraph_pivot_ancestry_boundary_test.go candidate/eth/protocols/snap/mathgraph_pivot_ancestry_boundary_test.go
+          cmp baseline/eth/downloader/downloader.go candidate/eth/downloader/downloader.go
+      - name: Base must fail both discriminating cases by assertion (not compile)
+        shell: bash
+        run: |
+          set -uo pipefail
+          (
+            cd baseline
+            go test ./eth/protocols/snap -run '^TestMathGraphPivotAncestryIndependent/(SkeletonOnlyMissingCanonical|RealReorgWithStaleCanonicalOldPivot)$' -count=1 -v
+          ) > evidence/logs/base-differential.txt 2>&1
+          code=$?
+          set -e
+          cat evidence/logs/base-differential.txt
+          test "$code" -ne 0
+          grep -Fq -- '--- FAIL: TestMathGraphPivotAncestryIndependent/SkeletonOnlyMissingCanonical' evidence/logs/base-differential.txt
+          grep -Fq -- '--- FAIL: TestMathGraphPivotAncestryIndependent/RealReorgWithStaleCanonicalOldPivot' evidence/logs/base-differential.txt
+          grep -Fq -- 'independent ancestry boundary: reorg=' evidence/logs/base-differential.txt
+          ! grep -Fq '[build failed]' evidence/logs/base-differential.txt
+      - name: Base must retain conservative negative controls
+        shell: bash
+        run: |
+          set -euo pipefail
+          (cd baseline && go test ./eth/protocols/snap -run '^TestMathGraphPivotAncestryIndependent/(MissingGapHeaderFailsClosed|NonAdvancingTargetFailsClosed)$' -count=2 -v) | tee evidence/logs/base-protected.txt
+      - name: Candidate must pass all independent boundary cases repeatedly
+        shell: bash
+        run: |
+          set -euo pipefail
+          (cd candidate && go test ./eth/protocols/snap -run '^TestMathGraphPivotAncestryIndependent$' -count=10 -v) | tee evidence/logs/candidate-boundaries.txt
+      - name: Candidate must pass independent boundaries under race detector
+        shell: bash
+        run: |
+          set -euo pipefail
+          (cd candidate && go test -race ./eth/protocols/snap -run '^TestMathGraphPivotAncestryIndependent$' -count=3) | tee evidence/logs/candidate-race.txt
+      - name: Candidate existing pivot movement and incremental BAL tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          (cd candidate && go test ./eth/protocols/snap -run '^Test(IsPivotReorged|PivotMovement|CatchUpPersistsIncrementally)$' -count=2 -v) | tee evidence/logs/candidate-movement.txt
+      - name: Candidate full downloader and snap package suite
+        shell: bash
+        run: |
+          set -euo pipefail
+          (cd candidate && go test ./eth/downloader ./eth/protocols/snap -count=1) | tee evidence/logs/candidate-packages.txt
+      - name: Upload sealed evidence to Metalogic fork
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: snap2-maintainer-35930-independent-evidence
+          path: evidence/logs/
+          if-no-files-found: error
