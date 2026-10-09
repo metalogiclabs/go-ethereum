@@ -736,9 +736,21 @@ func (f *BlobFetcher) loop() {
 		blobFetcherFetchingPeers.Update(int64(len(f.requests)))
 		blobFetcherFetchingHashes.Update(int64(len(f.fetches)))
 
-		// Loop did something, ping the step notifier if needed (tests)
+		// Test-only two-phase step barrier: the fetcher stops mutating
+		// internal state after publishing an event notification until the
+		// test releases it. Without the second handshake, test assertions
+		// race the next loop iteration and can observe partial transitions.
 		if f.step != nil {
-			f.step <- struct{}{}
+			select {
+			case f.step <- struct{}{}:
+			case <-f.quit:
+				return
+			}
+			select {
+			case <-f.step:
+			case <-f.quit:
+				return
+			}
 		}
 	}
 }
