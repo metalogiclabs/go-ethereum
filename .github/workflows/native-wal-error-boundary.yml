@@ -21,11 +21,18 @@ jobs:
           cache: false
       - name: Check native WAL probe formatting
         run: |
-          gofmt -d ethdb/leveldb/native_wal_ambiguity_test.go | tee /tmp/gofmt.diff
+          gofmt -d ethdb/leveldb/native_wal_ambiguity_test.go ethdb/pebble/native_precommit_error_test.go | tee /tmp/gofmt.diff
           test ! -s /tmp/gofmt.diff
       - name: Exact pinned goleveldb WAL error and recovery
         run: |
           go test ./ethdb/leveldb -run '^TestNativeLevelDBReportedErrorAfterJournalBytes$' -count=1 -v
+      - name: Native Pebble pre-commit control
+        run: go test ./ethdb/pebble -run '^TestNativePebbleReadOnlyWriteErrorDoesNotAdvanceState
+        run: |
+          go test ./ethdb/leveldb ./ethdb/pebble -count=1
+      - name: Focused race qualification
+        run: go test -race ./ethdb/leveldb -run '^TestNativeLevelDBReportedErrorAfterJournalBytes$' -count=1
+ -count=1 -v
       - name: Native ethdb LevelDB and Pebble suites
         run: |
           go test ./ethdb/leveldb ./ethdb/pebble -count=1
