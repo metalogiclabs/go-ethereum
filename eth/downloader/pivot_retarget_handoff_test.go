@@ -29,6 +29,7 @@ type pivotAuditSyncer struct {
 	oldNumber uint64
 	d         *Downloader
 	seen      chan common.Hash
+	started   chan struct{}
 }
 
 func (s *pivotAuditSyncer) Sync(pivot *types.Header, cancel chan struct{}) error {
@@ -41,10 +42,30 @@ func (s *pivotAuditSyncer) Sync(pivot *types.Header, cancel chan struct{}) error
 	case s.seen <- got:
 	default:
 	}
+	close(s.started)
 	s.d.committed.Store(true)
 	s.d.queue.Close()
 	<-cancel
 	return snap.ErrCancelled
+}
+
+// pivotReceiptDelayChain emulates a slow receipt-chain insertion. On the
+// vulnerable ordering a new state sync is already scheduled before insertion,
+// so it can observe the absent old-pivot index while this write is delayed.
+// The fixed ordering must complete the insert before the retarget can start.
+type pivotReceiptDelayChain struct {
+	BlockChain
+	retargetStarted <-chan struct{}
+}
+
+func (c *pivotReceiptDelayChain) InsertReceiptChain(
+	blocks types.Blocks, receipts []rlp.RawValue, ancientLimit uint64,
+) (int, error) {
+	select {
+	case <-c.retargetStarted:
+	case <-time.After(20 * time.Millisecond):
+	}
+	return c.BlockChain.InsertReceiptChain(blocks, receipts, ancientLimit)
 }
 
 // TestSnapPivotRetargetNewStateSyncSeesCanonical exercises the whole
@@ -68,9 +89,10 @@ func TestSnapPivotRetargetNewStateSyncSeesCanonical(t *testing.T) {
 	audit := &pivotAuditSyncer{
 		Syncer:  d.snapSyncer,
 		oldHash: previous.Hash(), oldNumber: previous.Number.Uint64(),
-		d: d, seen: make(chan common.Hash, 1),
+		d: d, seen: make(chan common.Hash, 1), started: make(chan struct{}),
 	}
 	d.snapSyncer = audit
+	d.blockchain = &pivotReceiptDelayChain{BlockChain: d.blockchain, retargetStarted: audit.started}
 
 	// Feed a contiguous, fully retrieved segment ending before the new pivot.
 	// The receipt-chain importer must commit both blocks before retarget.
