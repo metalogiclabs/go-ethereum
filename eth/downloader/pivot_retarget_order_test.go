@@ -23,7 +23,7 @@ func TestSnapPivotRetargetCommitOrder(t *testing.T) {
 		t.Fatal(err)
 	}
 	var (
-		commit token.Pos
+		commit   token.Pos
 		retarget token.Pos
 	)
 	for _, declaration := range file.Decls {
