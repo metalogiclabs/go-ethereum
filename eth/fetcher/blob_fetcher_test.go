@@ -783,6 +783,15 @@ func TestBlobFetcherFetchTimeout(t *testing.T) {
 func testBlobFetcher(t *testing.T, tt blobFetcherTest) {
 	clock := new(mclock.Simulated)
 	wait := make(chan struct{})
+	paused := false
+	// Synchronize state assertions with the fetcher loop. The worker stays
+	// paused after acknowledging an action until the next action releases it.
+	unpause := func() {
+		if paused {
+			wait <- struct{}{}
+			paused = false
+		}
+	}
 
 	// Create a fetcher and boot it up
 	fetcher := tt.init()
@@ -792,39 +801,30 @@ func testBlobFetcher(t *testing.T, tt blobFetcherTest) {
 	fetcher.Start()
 	defer fetcher.Stop()
 
-	defer func() {
-		for {
-			select {
-			case <-wait:
-			default:
-				return
-			}
-		}
-	}()
-
 	// Iterate through all the test steps and execute them
 	for i, step := range tt.steps {
-		// Clear the channel if anything is left over
-		for len(wait) > 0 {
-			<-wait
-		}
 		// Process the next step of the test
 		switch step := step.(type) {
 		case doBlobNotify:
+			unpause()
 			if err := fetcher.Notify(step.peer, step.hashes, step.custody); err != nil {
 				t.Errorf("step %d: failed to notify fetcher: %v", i, err)
 				return
 			}
 			<-wait
+			paused = true
 
 		case doBlobEnqueue:
+			unpause()
 			if err := fetcher.Enqueue(step.peer, step.hashes, step.cells, step.custody); err != nil {
 				t.Errorf("step %d: failed to enqueue blobs: %v", i, err)
 				return
 			}
 			<-wait
+			paused = true
 
 		case blobDoFunc:
+			unpause()
 			step(fetcher)
 
 		case isWaitingAvailability:
@@ -1050,16 +1050,20 @@ func testBlobFetcher(t *testing.T, tt blobFetcherTest) {
 			}
 
 		case doWait:
+			unpause()
 			clock.Run(step.time)
 			if step.step {
 				<-wait
+				paused = true
 			}
 
 		case doDrop:
+			unpause()
 			if err := fetcher.Drop(string(step)); err != nil {
 				t.Errorf("step %d: %v", i, err)
 			}
 			<-wait
+			paused = true
 
 		default:
 			t.Errorf("step %d: unknown step type %T", i, step)
