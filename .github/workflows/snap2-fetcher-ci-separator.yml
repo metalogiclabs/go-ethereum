@@ -1,0 +1,105 @@
+name: MathGraph Snap2 Fetcher CI Separator
+
+on:
+  push:
+    branches:
+      - snap2-fetcher-ci-separator-v1
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  fetcher-comparison:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - name: Checkout independent experiment branch (Metalogic only)
+        uses: actions/checkout@v4
+        with:
+          path: evidence
+          persist-credentials: false
+      - name: Checkout exact upstream parent
+        uses: actions/checkout@v4
+        with:
+          repository: ethereum/go-ethereum
+          ref: d4e25dddf2a474774a5f06fab020c0891fd99ff5
+          path: baseline
+          persist-credentials: false
+      - name: Checkout exact maintainer PR 35930 head
+        uses: actions/checkout@v4
+        with:
+          repository: jrhea/go-ethereum
+          ref: 03bc8e78381f80c06cb247277a2962b0d170d13c
+          path: candidate
+          persist-credentials: false
+      - name: Configure Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.27'
+          cache: false
+      - name: Prove fetcher source is identical across revisions
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p evidence/logs
+          test "$(git -C baseline rev-parse HEAD)" = d4e25dddf2a474774a5f06fab020c0891fd99ff5
+          test "$(git -C candidate rev-parse HEAD)" = 03bc8e78381f80c06cb247277a2962b0d170d13c
+          diff -rq baseline/eth/fetcher candidate/eth/fetcher | tee evidence/logs/fetcher-source-diff.txt
+          test ! -s evidence/logs/fetcher-source-diff.txt
+          {
+            printf 'base=%s\n' "$(git -C baseline rev-parse HEAD)"
+            printf 'candidate=%s\n' "$(git -C candidate rev-parse HEAD)"
+            printf 'harness=%s\n' "$(git -C evidence rev-parse HEAD)"
+            go version
+            printf 'eth/fetcher source is byte-identical in both commits.\n'
+            echo 'No upstream mutation or code patching; tests run on exact source.'
+          } | tee evidence/logs/manifest.txt
+      - name: Run controlled tests and preserve both positives and negatives
+        shell: bash
+        run: |
+          set -euo pipefail
+          summary="evidence/logs/summary.tsv"
+          printf 'revision\tvariant\texit_code\tfailed_instances\n' > "$summary"
+
+          run_probe() {
+            local revision="$1" variant="$2" out="evidence/logs/${1}-${2}.txt" rc count
+            printf 'Testing %s %s\n' "$revision" "$variant"
+            set +e
+            if [ "$variant" = "targeted" ]; then
+              (cd "$revision" && go test ./eth/fetcher -run '^TestBlobFetcherPartialDelivery$' -count=200 -cpu=1,2,4) > "$out" 2>&1
+            elif [ "$variant" = "full-suite" ]; then
+              (cd "$revision" && go test ./eth/fetcher -count=12) > "$out" 2>&1
+            else
+              (cd "$revision" && go test -race ./eth/fetcher -run '^TestBlobFetcherPartialDelivery$' -count=30 -cpu=2,4) > "$out" 2>&1
+            fi
+            rc=$?
+            set -e
+            count=$(grep -c -- '^--- FAIL: TestBlobFetcherPartialDelivery' "$out" || true)
+            printf '%s\t%s\t%s\t%s\n' "$revision" "$variant" "$rc" "$count" | tee -a "$summary"
+            if [ "$rc" -ne 0 ]; then
+              echo "Observed failure in $revision ($variant), tail:"
+              tail -n 40 "$out"
+            fi
+          }
+
+          run_probe baseline targeted
+          run_probe candidate targeted
+          run_probe candidate full-suite
+          run_probe baseline full-suite
+          run_probe baseline race
+          run_probe candidate race
+
+          cat "$summary"
+          if grep -q 'missing peer request' evidence/logs/*.txt; then
+            echo "A peer-request scheduling failure was reproduced. Compare both revisions."
+          else
+            echo "Not reproduced in this environment; this does NOT prove the upstream failure impossible."
+          fi
+      - name: Upload evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: snap2-fetcher-ci-separator-evidence
+          path: evidence/logs/
+          if-no-files-found: error
