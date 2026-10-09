@@ -120,13 +120,20 @@ func TestNativeLevelDBReportedErrorAfterSyncedFileJournal(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	b := new(goleveldb.Batch)
-	b.Put([]byte("SnapshotSyncStatus"), []byte("next-pivot"))
-	b.Put([]byte("FlatState"), []byte("new-flat-state"))
-	faultStore.armed.Store(true)
-	if err := db.Write(b, nil); !errors.Is(err, errInjectedJournalIO) {
-		t.Fatalf("file-backed LevelDB.Write: got %v, want injected I/O error", err)
+	// Exercise geth's actual ethdb.Batch.Write adapter, which forwards
+	// directly to the pinned goleveldb.DB.Write.
+	b := (&Database{db: db}).NewBatch()
+	if err := b.Put([]byte("SnapshotSyncStatus"), []byte("next-pivot")); err != nil {
+		t.Fatal(err)
 	}
+	if err := b.Put([]byte("FlatState"), []byte("new-flat-state")); err != nil {
+		t.Fatal(err)
+	}
+	faultStore.armed.Store(true)
+	if err := b.Write(); !errors.Is(err, errInjectedJournalIO) {
+		t.Fatalf("geth ethdb Batch.Write: got %v, want native journal I/O error", err)
+	}
+	b.Close()
 	if !faultStore.injected.Load() {
 		t.Fatal("file-backed journal writer was not faulted")
 	}
