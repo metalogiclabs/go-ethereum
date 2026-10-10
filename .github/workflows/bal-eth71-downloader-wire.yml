@@ -1,0 +1,52 @@
+name: BAL ETH71 Downloader-Wire A/B V1
+
+on:
+  push:
+    branches:
+      - bal-downloader-wire-ab-v1
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  downloader-wire-replay:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Overlay pinned merged upstream on fork-only fixture
+        run: |
+          git config user.name "Metalogic Research CI"
+          git config user.email "ci@mathgraph.org"
+          git fetch --no-tags https://github.com/ethereum/go-ethereum.git 3a6c2e3b35ef8caa3d39dcbea3fe9f09099cca8c
+          git merge --no-edit FETCH_HEAD
+          git merge-base --is-ancestor 3a6c2e3b35ef8caa3d39dcbea3fe9f09099cca8c HEAD
+          echo "MG_ETH_WIRE_MERGE_COMMIT=$(git rev-parse HEAD)"
+          echo "MG_ETH_WIRE_MERGE_TREE=$(git rev-parse HEAD^{tree})"
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.27'
+          cache: false
+      - name: Formatting and protected importer controls
+        run: |
+          gofmt -d eth/bal_downloader_wire_ab_test.go eth/bal_node_service_ab_test.go | tee /tmp/format.diff
+          test ! -s /tmp/format.diff
+          go test ./core -run '^(TestBALFinalityMultiwindowInsertChain|TestBALReconstructionFinalityForkImport|TestBALReconstructionRejectsBrokenSkeletonChain)$' -count=1 -v
+      - name: Real ETH71 wire, downloader, A/B and disk restart
+        run: |
+          set -o pipefail
+          go test ./eth -run '^TestBALDownloaderWirePairedImportAndRestart$' -count=1 -v -timeout=15m | tee /tmp/bal-wire.log
+          grep 'MG_ETH_WIRE_EVIDENCE' /tmp/bal-wire.log > /tmp/bal-wire-records.txt
+          test "$(wc -l < /tmp/bal-wire-records.txt)" -eq 4
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: bal-eth71-downloader-wire-v1-evidence
+          path: |
+            /tmp/bal-wire.log
+            /tmp/bal-wire-records.txt
+            /tmp/format.diff
+          if-no-files-found: ignore
