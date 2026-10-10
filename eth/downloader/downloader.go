@@ -159,7 +159,7 @@ type Downloader struct {
 	receiptFetchHook func([]*types.Header) // Method to call upon starting a receipt fetch
 	balFetchHook     func([]*types.Header) // Method to call upon starting a block access list fetch
 	chainInsertHook  func([]*fetchResult)  // Method to call upon inserting a chain of blocks (possibly in multiple invocations)
-	balImportHook    func(uint64, bool)   // Fork-only research probe at exact block BAL pointer load
+	balImportHook    func(uint64, bool)    // Fork-only research probe at exact block BAL pointer load
 
 	// Progress reporting metrics
 	syncStartBlock uint64    // Head snap block when Geth was started
