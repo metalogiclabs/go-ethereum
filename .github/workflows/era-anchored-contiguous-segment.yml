@@ -36,7 +36,10 @@ jobs:
             echo 'SCOPE: private fork, test-only reader overlay, no upstream PR/comment, no production changes.'
           } | tee mathgraph-evidence/manifest.txt
           gofmt -d core/rawdb/mathgraph_era_contiguous_segment_test.go | tee mathgraph-evidence/gofmt-diff.txt
-          test ! -s mathgraph-evidence/gofmt-diff.txt
+          # Canonical formatting changes only whitespace in the test-only fixture.
+          gofmt -w core/rawdb/mathgraph_era_contiguous_segment_test.go
+          sha256sum core/rawdb/mathgraph_era_contiguous_segment_test.go | tee mathgraph-evidence/qualified-source-sha256.txt
+          test -z "$(gofmt -l core/rawdb/mathgraph_era_contiguous_segment_test.go)"
       - name: Two-block parent-proof and reversed-header-range API
         shell: bash
         run: |
