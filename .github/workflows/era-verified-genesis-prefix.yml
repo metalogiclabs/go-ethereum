@@ -1,0 +1,85 @@
+name: MathGraph ERA Verified Genesis Prefix
+
+on:
+  push:
+    branches:
+      - era-verified-genesis-prefix-v1
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  genesis-prefix:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.27'
+          cache: false
+      - name: Pin exact source and trust boundary
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p mathgraph-evidence
+          gofmt -w core/rawdb/mathgraph_era_verified_genesis_prefix_test.go
+          {
+            printf 'commit=%s\n' "$(git rev-parse HEAD)"
+            go version
+            sha256sum core/rawdb/mathgraph_era_verified_genesis_prefix_test.go
+            echo 'Authority: ethPandaOps published ERA1 file SHA-256 and published Sepolia genesis hash.'
+            echo 'NOT a consensus-finality proof; no full node startup or archive sync claimed.'
+            echo 'No upstream comments, PRs, reviewers or production modifications.'
+          } | tee mathgraph-evidence/manifest.txt
+      - name: Compare both published Sepolia archive checksums
+        shell: bash
+        run: |
+          set -euo pipefail
+          # https://data.ethpandaops.io/era1/sepolia/checksums.txt
+          # Zero-based epoch indices 0 and 21 from a separately published archive.
+          printf '%s  %s\n' 'ab7f6d4f4eba0267406f783b75accc7a93dece520242d04fed27b0af51d79242' 'core/rawdb/eradb/testdata/sepolia-00000-643a00f7.era1' | sha256sum -c - | tee mathgraph-evidence/epoch0-checksum.txt
+          printf '%s  %s\n' '8041d790a0c50044e331a385eb98b17f5050ab25637b6a4f2c3e8e99f3f81e6e' 'core/rawdb/eradb/testdata/sepolia-00021-b8814b14.era1' | sha256sum -c - | tee mathgraph-evidence/epoch21-checksum.txt
+      - name: Virtual contiguous genesis prefix without backing import
+        shell: bash
+        run: |
+          set -euo pipefail
+          go test ./core/rawdb -run '^TestMathGraphEraVerifiedGenesisPrefixReads$' -count=5 -v | tee mathgraph-evidence/prefix-positive.txt
+          grep -q 'VERIFIED_ERA_GENESIS_VIRTUAL_PREFIX' mathgraph-evidence/prefix-positive.txt
+      - name: Reject missing, corrupt or conflicting genesis history
+        shell: bash
+        run: |
+          set -euo pipefail
+          go test ./core/rawdb -run '^TestMathGraphEraGenesisPrefixRejectsIncompleteHistory$' -count=5 -v | tee mathgraph-evidence/prefix-negatives.txt
+          grep -q 'REJECTED_ERA_GENESIS_PREFIX_GAP_CORRUPTION_AND_INDEX_CONFLICT' mathgraph-evidence/prefix-negatives.txt
+      - name: Concurrent virtual genesis reader
+        shell: bash
+        run: |
+          set -euo pipefail
+          go test ./core/rawdb -run '^TestMathGraphEraGenesisPrefixConcurrent$' -count=6 -v | tee mathgraph-evidence/prefix-concurrent.txt
+          grep -q 'VERIFIED_ERA_GENESIS_PREFIX_CONCURRENT_READERS' mathgraph-evidence/prefix-concurrent.txt
+      - name: Race detector
+        shell: bash
+        run: |
+          set -euo pipefail
+          go test -race ./core/rawdb -run '^TestMathGraphEra(VerifiedGenesisPrefixReads|GenesisPrefixRejectsIncompleteHistory|GenesisPrefixConcurrent)$' -count=2 | tee mathgraph-evidence/prefix-race.txt
+      - name: Retain all earlier bounded MathGraph results
+        shell: bash
+        run: |
+          set -euo pipefail
+          go test ./core/rawdb -run '^TestMathGraph' -count=1 | tee mathgraph-evidence/lineage.txt
+      - name: Existing rawdb and ERA reader suites
+        shell: bash
+        run: |
+          set -euo pipefail
+          go test ./core/rawdb ./core/rawdb/eradb -count=1 | tee mathgraph-evidence/packages.txt
+      - name: Upload evidence only to Metalogic
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: mathgraph-era-genesis-verified-prefix
+          path: mathgraph-evidence/
+          if-no-files-found: error
