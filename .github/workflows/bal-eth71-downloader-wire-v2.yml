@@ -1,0 +1,52 @@
+name: BAL ETH Downloader-Wire V2 Legacy Negative
+
+on:
+  push:
+    branches:
+      - bal-downloader-wire-legacy-separator-v2
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  qualified-wire:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Overlay pinned upstream ancestry fix
+        run: |
+          git config user.name "Metalogic Research CI"
+          git config user.email "ci@mathgraph.org"
+          git fetch --no-tags https://github.com/ethereum/go-ethereum.git 3a6c2e3b35ef8caa3d39dcbea3fe9f09099cca8c
+          git merge --no-edit FETCH_HEAD
+          git merge-base --is-ancestor 3a6c2e3b35ef8caa3d39dcbea3fe9f09099cca8c HEAD
+          echo "MG_ETH_WIRE_V2_MERGE_COMMIT=$(git rev-parse HEAD)"
+          echo "MG_ETH_WIRE_V2_MERGE_TREE=$(git rev-parse HEAD^{tree})"
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.27'
+          cache: false
+      - name: Exact format and protected core controls
+        run: |
+          gofmt -d eth/bal_downloader_wire_ab_test.go eth/bal_node_service_ab_test.go | tee /tmp/format.diff
+          test ! -s /tmp/format.diff
+          go test ./core -run '^(TestBALFinalityMultiwindowInsertChain|TestBALReconstructionFinalityForkImport|TestBALReconstructionRejectsBrokenSkeletonChain)$' -count=1 -v
+      - name: ETH71 paired A/B and ETH69 no-BAL protected negative
+        run: |
+          set -o pipefail
+          go test ./eth -run '^TestBALDownloader(WirePairedImportAndRestart|LegacyPeerForcesFallback)$' -count=1 -v -timeout=20m | tee /tmp/bal-wire-v2.log
+          grep -E 'MG_ETH_WIRE_EVIDENCE|MG_ETH_WIRE_LEGACY_NEGATIVE' /tmp/bal-wire-v2.log > /tmp/bal-wire-v2-records.txt
+          test "$(wc -l < /tmp/bal-wire-v2-records.txt)" -eq 5
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: bal-eth71-v2-eth69-negative-evidence
+          path: |
+            /tmp/bal-wire-v2.log
+            /tmp/bal-wire-v2-records.txt
+            /tmp/format.diff
+          if-no-files-found: ignore
