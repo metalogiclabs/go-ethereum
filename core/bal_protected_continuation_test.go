@@ -103,8 +103,8 @@ func TestBALProtectedFutureAcrossPebbleRestart(t *testing.T) {
 				db.Close()
 				t.Fatal(err)
 			}
-			defer bc.Stop()
 			defer db.Close()
+			defer bc.Stop()
 			if got := bc.CurrentBlock().Hash(); got != finalized.Hash() {
 				t.Fatalf("reopened head = %s, want %s", got, finalized.Hash())
 			}
