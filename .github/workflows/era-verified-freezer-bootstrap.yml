@@ -1,0 +1,82 @@
+name: MathGraph Native ERA Freezer Bootstrap
+
+on:
+  push:
+    branches:
+      - era-verified-freezer-bootstrap-v1
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  index-integration:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.27'
+          cache: false
+      - name: Pin exact branch and format test-only source
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p mathgraph-evidence
+          gofmt -w core/rawdb/mathgraph_era_native_freezer_bootstrap_test.go
+          {
+            printf 'exact-commit=%s\n' "$(git rev-parse HEAD)"
+            go version
+            sha256sum core/rawdb/mathgraph_era_native_freezer_bootstrap_test.go
+            echo 'Full production code is byte-identical to upstream base.'
+            echo 'Archive source bound by published ethPandaOps epoch-0 checksum and Sepolia genesis.'
+            echo 'Only pre-existing Geth InitDatabaseFromFreezer is invoked; no upstream PR or contact.'
+          } | tee mathgraph-evidence/manifest.txt
+      - name: Independent ERA archive checksum
+        shell: bash
+        run: |
+          set -euo pipefail
+          printf '%s  %s\n' 'ab7f6d4f4eba0267406f783b75accc7a93dece520242d04fed27b0af51d79242' 'core/rawdb/eradb/testdata/sepolia-00000-643a00f7.era1' | sha256sum -c - | tee mathgraph-evidence/published-checksum.txt
+      - name: Native freezer initialization on virtual verified prefix
+        shell: bash
+        run: |
+          set -euo pipefail
+          go test ./core/rawdb -run '^TestMathGraphEraNativeFreezerIndexBootstrap$' -count=5 -v | tee mathgraph-evidence/native-bootstrap.txt
+          grep -q 'VERIFIED_NATIVE_ERA_PREFIX_INDEX_BOOTSTRAP' mathgraph-evidence/native-bootstrap.txt
+      - name: Prove restart cannot safely lose the ERA source
+        shell: bash
+        run: |
+          set -euo pipefail
+          go test ./core/rawdb -run '^TestMathGraphEraFreezerBootstrapCannotOutliveUnverifiedSource$' -count=5 -v | tee mathgraph-evidence/restart-obstruction.txt
+          grep -q 'RESTART_RESIDUAL_ARCHIVE_BINDING_REQUIRED' mathgraph-evidence/restart-obstruction.txt
+      - name: Reject bad archive before writing native metadata
+        shell: bash
+        run: |
+          set -euo pipefail
+          go test ./core/rawdb -run '^TestMathGraphEraInvalidPrefixNeverStartsNativeBootstrap$' -count=5 -v | tee mathgraph-evidence/invalid-prebootstrap.txt
+          grep -q 'REJECTED_NATIVE_BOOTSTRAP_WITH_UNWARRANTED_ERA_PREFIX' mathgraph-evidence/invalid-prebootstrap.txt
+      - name: Run bootstrap tests under race detector
+        shell: bash
+        run: |
+          set -euo pipefail
+          go test -race ./core/rawdb -run '^TestMathGraphEra(NativeFreezerIndexBootstrap|FreezerBootstrapCannotOutliveUnverifiedSource|InvalidPrefixNeverStartsNativeBootstrap)$' -count=2 | tee mathgraph-evidence/race.txt
+      - name: Retain previously verified ERA reader lineage
+        shell: bash
+        run: |
+          set -euo pipefail
+          go test ./core/rawdb -run '^TestMathGraph' -count=1 | tee mathgraph-evidence/lineage.txt
+      - name: Full rawdb and ERA reader packages
+        shell: bash
+        run: |
+          set -euo pipefail
+          go test ./core/rawdb ./core/rawdb/eradb -count=1 | tee mathgraph-evidence/packages.txt
+      - name: Upload evidence to Metalogic fork
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: mathgraph-native-era-freezer-init-evidence
+          path: mathgraph-evidence/
+          if-no-files-found: error
