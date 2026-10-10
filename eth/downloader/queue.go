@@ -214,6 +214,14 @@ type queue struct {
 
 	// Fork-only research hook: emitted after BAL hash/decode validation and successful result attachment.
 	balAttachHook func(uint64)
+
+	// Fork-only research policy, deliberately zero by default and capped below.
+	// A grace interval is applied once per completed downloader batch, before
+	// that batch is irrevocably removed from the result cache.
+	balGraceWindow    time.Duration
+	balGraceSignal    chan struct{}
+	balGraceStartHook func(int)
+	balGraceEndHook   func(time.Duration, bool)
 }
 
 // newQueue creates a new download queue for scheduling block retrieval.
@@ -226,6 +234,7 @@ func newQueue(blockCacheLimit int, thresholdInitialSize int) *queue {
 		receiptWakeCh:    make(chan bool, 1),
 		balTaskQueue:     prque.New[int64, *types.Header](nil),
 		balWakeCh:        make(chan bool, 1),
+		balGraceSignal:   make(chan struct{}, 1),
 		active:           sync.NewCond(lock),
 		lock:             lock,
 	}
@@ -267,6 +276,10 @@ func (q *queue) Close() {
 	q.closed = true
 	q.active.Signal()
 	q.lock.Unlock()
+	select {
+	case q.balGraceSignal <- struct{}{}:
+	default:
+	}
 }
 
 // PendingBodies retrieves the number of block body requests pending for retrieval.
@@ -472,6 +485,13 @@ func (q *queue) Results(block bool) []*fetchResult {
 		closed = q.closed
 		q.lock.Unlock()
 	}
+	// Research-only and disabled by default: briefly retain completed results
+	// in the cache so pending, authenticated BALs can be attached before import.
+	// Never hold q.lock while waiting, since DeliverBALs needs that lock.
+	if block && !closed && q.balGraceWindow > 0 {
+		q.waitForCompletedBALGrace()
+	}
+
 	// Regardless if closed or not, we can still deliver whatever we have
 	results := q.resultCache.GetCompleted(maxResultsProcess)
 
@@ -520,6 +540,49 @@ func (q *queue) Results(block bool) []*fetchResult {
 		log.Debug("Downloader queue stats", info...)
 	}
 	return results
+}
+
+// waitForCompletedBALGrace is a bounded, optional experiment, not a Geth
+// default or upstream recommendation. It may improve BAL availability but
+// cannot change finality, validate uncommitted content, or wait indefinitely.
+// The timer is global to this Results call and never renewed by new arrivals.
+func (q *queue) waitForCompletedBALGrace() {
+	missing := q.resultCache.CompletedMissingBALs(maxResultsProcess)
+	if missing == 0 {
+		return
+	}
+	const hardMax = 25 * time.Millisecond
+	window := q.balGraceWindow
+	if window > hardMax {
+		window = hardMax
+	}
+	start := time.Now()
+	if q.balGraceStartHook != nil {
+		q.balGraceStartHook(missing)
+	}
+	timer := time.NewTimer(window)
+	defer timer.Stop()
+	exhausted := false
+
+grace:
+	for missing > 0 {
+		q.lock.RLock()
+		closed := q.closed
+		q.lock.RUnlock()
+		if closed {
+			break
+		}
+		select {
+		case <-q.balGraceSignal:
+			missing = q.resultCache.CompletedMissingBALs(maxResultsProcess)
+		case <-timer.C:
+			exhausted = true
+			break grace
+		}
+	}
+	if q.balGraceEndHook != nil {
+		q.balGraceEndHook(time.Since(start), exhausted)
+	}
 }
 
 func (q *queue) Stats() []interface{} {
@@ -1072,6 +1135,10 @@ func (q *queue) DeliverBALs(id string, bals []rlp.RawValue, hashes []common.Hash
 			accepted++
 			if q.balAttachHook != nil {
 				q.balAttachHook(header.Number.Uint64())
+			}
+			select {
+			case q.balGraceSignal <- struct{}{}:
+			default:
 			}
 		}
 		delete(q.balTaskPool, hash)
