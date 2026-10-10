@@ -1,0 +1,77 @@
+name: MathGraph ERA 64-Block Consequential Range
+
+on:
+  push:
+    branches:
+      - era-anchored-64-block-stress-v1
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  bounded-64:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.27'
+          cache: false
+      - name: Seal committed source and formatting
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p mathgraph-evidence
+          {
+            printf 'exact-commit=%s\n' "$(git rev-parse HEAD)"
+            go version
+            sha256sum core/rawdb/mathgraph_era_contiguous_segment_test.go
+            sha256sum core/rawdb/mathgraph_era_64_block_stress_test.go
+            echo 'Pinned tip fixture is NOT an independently authenticated Sepolia consensus checkpoint.'
+            echo 'Only test fixture and workflow changes; no upstream contact.'
+          } | tee mathgraph-evidence/source-manifest.txt
+          test -z "$(gofmt -l core/rawdb/mathgraph_era_contiguous_segment_test.go core/rawdb/mathgraph_era_64_block_stress_test.go)"
+      - name: Full 64-block canonical and range read through
+        shell: bash
+        run: |
+          set -euo pipefail
+          go test ./core/rawdb -run '^TestMathGraphEra64BlockVerifiedRange$' -count=5 -v | tee mathgraph-evidence/64-positive.txt
+          grep -q 'VERIFIED_64_BLOCK_ERA_SEGMENT' mathgraph-evidence/64-positive.txt
+      - name: Interior gaps, tampering, conflicts, and bound tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          go test ./core/rawdb -run '^TestMathGraphEra64BlockRejectsInteriorFailures$' -count=5 -v | tee mathgraph-evidence/64-negative.txt
+          grep -q 'REJECTED_64_BLOCK_INTERIOR_GAP_FORK_CORRUPTION_AND_CONFLICT' mathgraph-evidence/64-negative.txt
+      - name: Concurrent readers
+        shell: bash
+        run: |
+          set -euo pipefail
+          go test ./core/rawdb -run '^TestMathGraphEra64BlockConcurrentReadOnly$' -count=6 -v | tee mathgraph-evidence/64-concurrency.txt
+          grep -q 'VERIFIED_64_BLOCK_CONCURRENT_READ_ONLY' mathgraph-evidence/64-concurrency.txt
+      - name: Race detector on 64-block suite
+        shell: bash
+        run: |
+          set -euo pipefail
+          go test -race ./core/rawdb -run '^TestMathGraphEra64Block' -count=2 | tee mathgraph-evidence/64-race.txt
+      - name: Preserve previously warranted ancestry and no-import tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          go test ./core/rawdb -run '^TestMathGraph' -count=1 | tee mathgraph-evidence/predecessor.txt
+      - name: Full existing rawdb and ERA package suites
+        shell: bash
+        run: |
+          set -euo pipefail
+          go test ./core/rawdb ./core/rawdb/eradb -count=1 | tee mathgraph-evidence/packages.txt
+      - name: Upload evidence only to Metalogic fork
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: mathgraph-verified-64-block-era-segment
+          path: mathgraph-evidence/
+          if-no-files-found: error
