@@ -34,7 +34,17 @@ jobs:
             echo 'Pinned tip fixture is NOT an independently authenticated Sepolia consensus checkpoint.'
             echo 'Only test fixture and workflow changes; no upstream contact.'
           } | tee mathgraph-evidence/source-manifest.txt
+          gofmt -w core/rawdb/mathgraph_era_contiguous_segment_test.go core/rawdb/mathgraph_era_64_block_stress_test.go
           test -z "$(gofmt -l core/rawdb/mathgraph_era_contiguous_segment_test.go core/rawdb/mathgraph_era_64_block_stress_test.go)"
+          sha256sum core/rawdb/mathgraph_era_contiguous_segment_test.go core/rawdb/mathgraph_era_64_block_stress_test.go | tee mathgraph-evidence/qualified-gofmt-sha256.txt
+      - name: External archive checksum against published Sepolia ERA1 epoch 21
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Source: https://data.ethpandaops.io/era1/sepolia/checksums.txt
+          # Epoch 21 is line 22 (0-indexed item 21). This is publisher
+          # archive integrity, NOT an independently verified consensus root.
+          printf '%s  %s\n' '8041d790a0c50044e331a385eb98b17f5050ab25637b6a4f2c3e8e99f3f81e6e' 'core/rawdb/eradb/testdata/sepolia-00021-b8814b14.era1' | sha256sum -c - | tee mathgraph-evidence/external-era-sha256.txt
       - name: Full 64-block canonical and range read through
         shell: bash
         run: |
