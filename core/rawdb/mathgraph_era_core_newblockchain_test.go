@@ -79,7 +79,6 @@ func TestMathGraphEraRealCoreNewBlockChainStartup(t *testing.T) {
     // The history after genesis must remain virtual, even though
     // core.NewBlockChain can read every header and body through the overlay.
     for n := uint64(1); n < mathgraphGenesisPrefixLength; n++ {
-        hash := sources[n].block.Hash()
         if bc.GetHeaderByNumber(n) == nil || bc.GetBlockByNumber(n) == nil {
             t.Fatalf("verified archive block %d inaccessible to core.BlockChain", n)
         }
@@ -95,7 +94,6 @@ func TestMathGraphEraRealCoreNewBlockChainStartup(t *testing.T) {
         if head := bc.CurrentBlock(); head.Number.Uint64() != 0 {
             t.Fatalf("block %d incorrectly promoted as executed state", n)
         }
-        _ = hash
     }
     // Where the archive tip's root differs from genesis, its trie must
     // remain absent until the state transition is actually executed.
@@ -149,17 +147,29 @@ func TestMathGraphEraRealCoreStartupGenesisConflictFailsClosed(t *testing.T) {
         t.Fatal(err)
     }
     // A deliberately mismatched genesis specification must not be installed
-    // simply because all of the archive reads are internally consistent.
+    // simply because all archived reads agree with one another.
+    view, err := mathgraphGuardedEraReattach(backing, sources, mathgraphEra0Path())
+    if err != nil {
+        t.Fatal(err)
+    }
     wrong := core.DefaultGenesisBlock()
     if wrong.ToBlock().Hash() == mathgraphPublishedSepoliaGenesis {
         t.Fatal("negative-control genesis unexpectedly matches Sepolia")
     }
-    bc, err := core.NewBlockChain(
-        &mathgraphGenesisPrefixView{mathgraphEraSegmentView:nil}, wrong,
-        beacon.New(ethash.NewFaker()), mathgraphSepoliaStartupConfig(),
-    )
+    bc, startupErr := core.NewBlockChain(view, wrong,
+        beacon.New(ethash.NewFaker()), mathgraphSepoliaStartupConfig())
     if bc != nil {
         bc.Stop()
+        t.Fatal("mismatched genesis was accepted by native constructor")
     }
-    _ = err
+    if startupErr == nil {
+        t.Fatal("native constructor did not reject incorrect network genesis")
+    }
+    if rawdb.ReadChainConfig(backing, wrong.ToBlock().Hash()) != nil {
+        t.Fatal("incorrect network configuration was written")
+    }
+    if rawdb.ReadHeadBlockHash(backing) != (common.Hash{}) {
+        t.Fatal("negative genesis test fabricated an execution head")
+    }
+    t.Logf("REJECTED_REAL_CORE_BLOCKCHAIN_GENESIS_MISMATCH: %v", startupErr)
 }
