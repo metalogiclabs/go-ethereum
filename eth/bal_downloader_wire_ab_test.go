@@ -27,10 +27,10 @@ import (
 type balWireCounter struct {
 	p2p.MsgReadWriter
 	headersRequested atomic.Uint64
-	bodiesRequested atomic.Uint64
-	balsRequested atomic.Uint64
-	balsReturned atomic.Uint64
-	bodiesReturned atomic.Uint64
+	bodiesRequested  atomic.Uint64
+	balsRequested    atomic.Uint64
+	balsReturned     atomic.Uint64
+	bodiesReturned   atomic.Uint64
 }
 
 func (w *balWireCounter) ReadMsg() (p2p.Msg, error) {
@@ -62,24 +62,24 @@ func (w *balWireCounter) WriteMsg(msg p2p.Msg) error {
 }
 
 type balWireABObservation struct {
-	Round int `json:"round"`
-	Mode string `json:"mode"`
-	Head string `json:"head"`
-	StateRoot string `json:"state_root"`
-	Counter uint64 `json:"counter"`
-	Blocks int `json:"blocks"`
-	TxBlocks int `json:"tx_blocks"`
-	ExecutedTxBlocks int `json:"executed_tx_blocks"`
-	ExecutionlessTxBlocks int `json:"executionless_tx_blocks"`
-	ReopenedExecutedTxBlocks int `json:"reopened_executed_tx_blocks"`
-	ReopenedExecutionlessTxBlocks int `json:"reopened_executionless_tx_blocks"`
-	HeaderRequests uint64 `json:"header_requests"`
-	BodyRequests uint64 `json:"body_requests"`
-	BALRequests uint64 `json:"bal_requests"`
-	BALResponses uint64 `json:"bal_responses"`
-	BodyResponses uint64 `json:"body_responses"`
-	SyncWallNS int64 `json:"sync_wall_ns"`
-	RestartVerified bool `json:"restart_verified"`
+	Round                         int    `json:"round"`
+	Mode                          string `json:"mode"`
+	Head                          string `json:"head"`
+	StateRoot                     string `json:"state_root"`
+	Counter                       uint64 `json:"counter"`
+	Blocks                        int    `json:"blocks"`
+	TxBlocks                      int    `json:"tx_blocks"`
+	ExecutedTxBlocks              int    `json:"executed_tx_blocks"`
+	ExecutionlessTxBlocks         int    `json:"executionless_tx_blocks"`
+	ReopenedExecutedTxBlocks      int    `json:"reopened_executed_tx_blocks"`
+	ReopenedExecutionlessTxBlocks int    `json:"reopened_executionless_tx_blocks"`
+	HeaderRequests                uint64 `json:"header_requests"`
+	BodyRequests                  uint64 `json:"body_requests"`
+	BALRequests                   uint64 `json:"bal_requests"`
+	BALResponses                  uint64 `json:"bal_responses"`
+	BodyResponses                 uint64 `json:"body_responses"`
+	SyncWallNS                    int64  `json:"sync_wall_ns"`
+	RestartVerified               bool   `json:"restart_verified"`
 }
 
 func balWireWait(t *testing.T, description string, wait time.Duration, test func() bool, errs <-chan error) {
@@ -200,11 +200,11 @@ func balWireOneArm(t *testing.T, round int, reconstruct bool, genesis *core.Gene
 		Counter: uint64(txCount), Blocks: len(blocks), TxBlocks: txCount,
 		ExecutedTxBlocks: executed, ExecutionlessTxBlocks: executionless,
 		HeaderRequests: sourceCounter.headersRequested.Load(),
-		BodyRequests: sourceCounter.bodiesRequested.Load(),
-		BALRequests: sourceCounter.balsRequested.Load(),
-		BALResponses: sourceCounter.balsReturned.Load(),
-		BodyResponses: sourceCounter.bodiesReturned.Load(),
-		SyncWallNS: elapsed.Nanoseconds(),
+		BodyRequests:   sourceCounter.bodiesRequested.Load(),
+		BALRequests:    sourceCounter.balsRequested.Load(),
+		BALResponses:   sourceCounter.balsReturned.Load(),
+		BodyResponses:  sourceCounter.bodiesReturned.Load(),
+		SyncWallNS:     elapsed.Nanoseconds(),
 	}
 	if observation.HeaderRequests == 0 || observation.BodyRequests == 0 || observation.BALRequests == 0 || observation.BALResponses == 0 {
 		t.Fatalf("wire coverage missing: %+v", observation)
