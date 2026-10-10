@@ -23,33 +23,33 @@ import (
 )
 
 type balImportCausalRow struct {
-	Height uint64 `json:"height"`
-	AttachedAtNS int64 `json:"attached_at_ns"`
-	ImportedAtNS int64 `json:"imported_at_ns"`
-	ReadyAtImport bool `json:"ready_at_import"`
-	Receipts int `json:"receipts"`
+	Height        uint64 `json:"height"`
+	AttachedAtNS  int64  `json:"attached_at_ns"`
+	ImportedAtNS  int64  `json:"imported_at_ns"`
+	ReadyAtImport bool   `json:"ready_at_import"`
+	Receipts      int    `json:"receipts"`
 }
 
 type balImportCausalResult struct {
-	Mode string `json:"mode"`
-	Blocks int `json:"blocks"`
-	PeerBALRequests uint64 `json:"peer_bal_requests"`
-	Attached int `json:"attached"`
-	ImportedReady int `json:"imported_ready"`
-	Executed int `json:"executed"`
-	Reconstructed int `json:"reconstructed"`
-	ReleasedAfterImport bool `json:"released_after_import"`
-	IdenticalHead bool `json:"identical_head"`
-	IdenticalStateRoot bool `json:"identical_state_root"`
-	Balance uint64 `json:"balance"`
-	Rows []balImportCausalRow `json:"rows"`
+	Mode                string               `json:"mode"`
+	Blocks              int                  `json:"blocks"`
+	PeerBALRequests     uint64               `json:"peer_bal_requests"`
+	Attached            int                  `json:"attached"`
+	ImportedReady       int                  `json:"imported_ready"`
+	Executed            int                  `json:"executed"`
+	Reconstructed       int                  `json:"reconstructed"`
+	ReleasedAfterImport bool                 `json:"released_after_import"`
+	IdenticalHead       bool                 `json:"identical_head"`
+	IdenticalStateRoot  bool                 `json:"identical_state_root"`
+	Balance             uint64               `json:"balance"`
+	Rows                []balImportCausalRow `json:"rows"`
 }
 
 type balTimeline struct {
 	sync.Mutex
-	attached map[uint64]int64
-	imported map[uint64]int64
-	ready map[uint64]bool
+	attached   map[uint64]int64
+	imported   map[uint64]int64
+	ready      map[uint64]bool
 	duplicates int
 }
 
@@ -67,7 +67,7 @@ func newBALCausalTester(t *testing.T, genesis *core.Genesis, success func()) *do
 		t.Fatal(err)
 	}
 	tester := &downloadTester{
-		db: db,
+		db:    db,
 		chain: bc,
 		peers: make(map[string]*downloadTesterPeer),
 	}
@@ -91,7 +91,7 @@ func runBALArrivalCase(t *testing.T, mode string, genesis *core.Genesis, blocks 
 	timeline := &balTimeline{
 		attached: make(map[uint64]int64),
 		imported: make(map[uint64]int64),
-		ready: make(map[uint64]bool),
+		ready:    make(map[uint64]bool),
 	}
 	tester.downloader.queue.balAttachHook = func(n uint64) {
 		timeline.Lock()
