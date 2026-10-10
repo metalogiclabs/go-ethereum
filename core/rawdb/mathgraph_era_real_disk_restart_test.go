@@ -21,11 +21,10 @@ import (
     "github.com/ethereum/go-ethereum/ethdb/leveldb"
 )
 
-func mathgraphOpenPersistentEraDB(t *testing.T, root, eraPath string) ethdb.Database {
-    t.Helper()
+func mathgraphTryOpenPersistentEraDB(root, eraPath string) (ethdb.Database, error) {
     kv, err := leveldb.New(filepath.Join(root, "leveldb"), 32, 32, "", false)
     if err != nil {
-        t.Fatal(err)
+        return nil, err
     }
     db, err := rawdb.Open(kv, rawdb.OpenOptions{
         Ancient: filepath.Join(root, "ancients"),
@@ -33,8 +32,15 @@ func mathgraphOpenPersistentEraDB(t *testing.T, root, eraPath string) ethdb.Data
     })
     if err != nil {
         kv.Close()
-        t.Fatal(err)
+        return nil, err
     }
+    return db, nil
+}
+
+func mathgraphOpenPersistentEraDB(t *testing.T, root, eraPath string) ethdb.Database {
+    t.Helper()
+    db, err := mathgraphTryOpenPersistentEraDB(root, eraPath)
+    if err != nil { t.Fatal(err) }
     return db
 }
 
@@ -79,35 +85,47 @@ func TestMathGraphERACoreRealDiskRestartIdentifiesCanonicalGenesisResidual(t *te
         t.Fatalf("first database close: %v", err)
     }
 
-    // Actual disk reopen—not a new wrapper over the same memorydb.
-    db2 := mathgraphOpenPersistentEraDB(t, root, archive)
-    defer db2.Close()
-    if got := rawdb.ReadCanonicalHash(db2, 0); got != mathgraphPublishedSepoliaGenesis {
-        t.Fatalf("persisted genesis missing after disk restart: %s", got)
+    // Real persistent disk reopen. Geth's first-party rawdb.Open rejects
+    // the bootstrap BEFORE our higher-level archive certificate guard runs:
+    // canonical genesis and head #63 exist in LevelDB, but the freezer is
+    // empty, and its continuity guard expects block #1 in LevelDB.
+    reopened, openErr := mathgraphTryOpenPersistentEraDB(root, archive)
+    if reopened != nil || openErr == nil {
+        if reopened != nil { reopened.Close() }
+        t.Fatal("the current standard opener unexpectedly accepted an unmaterialized ERA prefix")
     }
-    if got := rawdb.ReadHeadHeaderHash(db2); got != sources[len(sources)-1].block.Hash() {
-        t.Fatalf("persisted header head changed after disk restart: %s", got)
-    }
-    if got := rawdb.ReadHeadBlockHash(db2); got != mathgraphPublishedSepoliaGenesis {
-        t.Fatalf("persisted execution head changed after disk restart: %s", got)
-    }
-    if len(rawdb.ReadCanonicalBodyRLP(db2, mathgraphGenesisPrefixLength-1,nil)) != 0 {
-        t.Fatal("archive body was secretly persisted")
-    }
-    if rawdb.ReadCanonicalHash(db2,mathgraphGenesisPrefixLength-1) != (common.Hash{}) {
-        t.Fatal("archive tip canonical hash was secretly persisted")
+    if !strings.Contains(openErr.Error(), "ancient chain segments already extracted") {
+        t.Fatalf("unexpected database-opening obstacle: %v", openErr)
     }
 
-    // The earlier guard expected an empty backing canonical map at EVERY
-    // virtual height, so it cannot yet tolerate the legitimate genesis
-    // written by Geth. Preserve the exact obstruction and do not suppress.
-    reattached, err := mathgraphGuardedEraReattach(db2, sources, archive)
-    if reattached != nil || err == nil {
-        t.Fatal("expected old strict prototype to reject persisted genesis: adjust this test if fixed")
+    // Verify the original LevelDB storage survived the reopen rejection.
+    // This is a diagnostic raw-KV read, NOT permission to bypass the normal
+    // rawdb.Open guard in any actual Geth node.
+    kv, err := leveldb.New(filepath.Join(root, "leveldb"), 32, 32, "", false)
+    if err != nil { t.Fatal(err) }
+    direct := rawdb.NewDatabase(kv)
+    defer direct.Close()
+    if got := rawdb.ReadCanonicalHash(direct, 0); got != mathgraphPublishedSepoliaGenesis {
+        t.Fatalf("persisted genesis missing after disk restart: %s", got)
     }
-    if !strings.Contains(err.Error(), "existing canonical block at 0") {
-        t.Fatalf("unexpected restart boundary, not genesis coexistence: %v", err)
+    if got := rawdb.ReadHeadHeaderHash(direct); got != sources[len(sources)-1].block.Hash() {
+        t.Fatalf("persisted header head changed after disk restart: %s", got)
     }
-    t.Logf("CONFIRMED_ERA_RESTART_GENESIS_COEXISTENCE_RESIDUAL archive_headers=%d persisted_genesis=true no_bulk_import=true error=%q",
-        mathgraphGenesisPrefixLength, err)
+    if got := rawdb.ReadHeadBlockHash(direct); got != mathgraphPublishedSepoliaGenesis {
+        t.Fatalf("persisted execution head changed after disk restart: %s", got)
+    }
+    if len(rawdb.ReadCanonicalBodyRLP(direct, mathgraphGenesisPrefixLength-1, nil)) != 0 {
+        t.Fatal("archive body was secretly persisted")
+    }
+    if rawdb.ReadCanonicalHash(direct, mathgraphGenesisPrefixLength-1) != (common.Hash{}) {
+        t.Fatal("archive tip canonical hash was secretly persisted")
+    }
+    if ok, err := direct.Has(mathgraphEraBindingKey); err != nil || !ok {
+        t.Fatal("persisted archive provenance certificate missing")
+    }
+    if err := mathgraphCheckPublishedArchiveAt(archive); err != nil {
+        t.Fatalf("verified ERA source changed: %v", err)
+    }
+    t.Logf("CONFIRMED_ERA_RAWDB_OPEN_CONTINUITY_RESIDUAL persisted_genesis=true indexed_tip=%d archive_sha_valid=true no_bulk_import=true error=%q",
+        mathgraphGenesisPrefixLength-1, openErr)
 }
