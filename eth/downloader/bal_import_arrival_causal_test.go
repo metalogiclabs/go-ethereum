@@ -79,7 +79,7 @@ func newBALCausalTester(t *testing.T, genesis *core.Genesis, success func()) *do
 // executed remote Ethereum chain. In early mode the existing test BAL gate
 // withholds bodies until authenticated BAL attachment has completed. In late
 // mode the same peer withholds BAL responses until all blocks are imported.
-func runBALArrivalCase(t *testing.T, mode string, genesis *core.Genesis, blocks []*types.Block, serving *core.BlockChain) balImportCausalResult {
+func runBALArrivalCase(t *testing.T, mode string, genesis *core.Genesis, blocks []*types.Block, serving *core.BlockChain, expectedBalance uint64) balImportCausalResult {
 	t.Helper()
 	success := make(chan struct{})
 	tester := newBALCausalTester(t, genesis, func() { close(success) })
@@ -175,8 +175,8 @@ func runBALArrivalCase(t *testing.T, mode string, genesis *core.Genesis, blocks 
 		t.Fatal(err)
 	}
 	balance := state.GetBalance(common.Address{0x01}).Uint64()
-	if balance != uint64(len(blocks))*1000 {
-		t.Fatalf("%s: recipient balance=%d, want %d", mode, balance, uint64(len(blocks))*1000)
+	if balance != expectedBalance {
+		t.Fatalf("%s: recipient balance=%d, source balance=%d", mode, balance, expectedBalance)
 	}
 	result := balImportCausalResult{
 		Mode: mode, Blocks: len(blocks), PeerBALRequests: peer.balRequests.Load(),
@@ -264,9 +264,13 @@ func TestBALImportTimeAvailabilityCausalSeparator(t *testing.T) {
 		t.Fatalf("building identical serving chain: %d/%d, %v", n, len(blocks), err)
 	}
 
+	sourceState, err := serving.State()
+	if err != nil { t.Fatal(err) }
+	expectedBalance := sourceState.GetBalance(common.Address{0x01}).Uint64()
+	t.Logf("MG_BAL_CAUSAL_SOURCE expected_recipient_balance=%d", expectedBalance)
 	var outcomes []balImportCausalResult
 	for _, mode := range []string{"ready-before-body", "delayed-until-import"} {
-		res := runBALArrivalCase(t, mode, genesis, blocks, serving)
+		res := runBALArrivalCase(t, mode, genesis, blocks, serving, expectedBalance)
 		outcomes = append(outcomes, res)
 		summary := res
 		summary.Rows = nil
