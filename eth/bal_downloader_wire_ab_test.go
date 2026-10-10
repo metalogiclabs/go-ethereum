@@ -15,10 +15,8 @@ import (
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core"
-	"github.com/ethereum/go-ethereum/core/rawdb"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/eth/protocols/eth"
-	"github.com/ethereum/go-ethereum/node"
 	"github.com/ethereum/go-ethereum/p2p"
 	"github.com/ethereum/go-ethereum/p2p/enode"
 )
@@ -182,7 +180,7 @@ func balWireOneArm(t *testing.T, round int, reconstruct bool, genesis *core.Gene
 
 	balWireWait(t, "source peer advertised latest block", 6*time.Second, func() bool {
 		r := source.handler.blockRange.currentRange()
-		return r != nil && r.LatestBlock >= final.NumberU64()
+		return r.LatestBlock >= final.NumberU64()
 	}, peerErrs)
 	balWireWait(t, "ETH/71 peer registration", 8*time.Second, func() bool {
 		return target.handler.peers.len() > 0 && source.handler.peers.len() > 0
