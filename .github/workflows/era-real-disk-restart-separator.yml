@@ -40,7 +40,7 @@ jobs:
         run: |
           set -euo pipefail
           go test ./core/rawdb -run '^TestMathGraphERACoreRealDiskRestartIdentifiesCanonicalGenesisResidual$' -count=3 -timeout=10m -v | tee mathgraph-evidence/disk-separator.txt
-          grep -q 'CONFIRMED_ERA_RESTART_GENESIS_COEXISTENCE_RESIDUAL' mathgraph-evidence/disk-separator.txt
+          grep -q 'CONFIRMED_ERA_RAWDB_OPEN_CONTINUITY_RESIDUAL' mathgraph-evidence/disk-separator.txt
       - name: Disk restart under race detector
         shell: bash
         run: |
