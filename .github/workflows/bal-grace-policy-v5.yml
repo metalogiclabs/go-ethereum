@@ -1,0 +1,60 @@
+name: Ethereum BAL Grace Policy V5 Qualification
+
+on:
+  push:
+    branches:
+      - bal-grace-policy-v5
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  bounded-wait-admission:
+    runs-on: ubuntu-latest
+    timeout-minutes: 50
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Overlay pinned official post-35930 source in disposable checkout
+        run: |
+          git config user.name "Metalogic Research CI"
+          git config user.email "ci@mathgraph.org"
+          git fetch --no-tags https://github.com/ethereum/go-ethereum.git 3a6c2e3b35ef8caa3d39dcbea3fe9f09099cca8c
+          git merge --no-edit FETCH_HEAD
+          git merge-base --is-ancestor 3a6c2e3b35ef8caa3d39dcbea3fe9f09099cca8c HEAD
+          echo "MG_BAL_GRACE_MERGE_COMMIT=$(git rev-parse HEAD)"
+          echo "MG_BAL_GRACE_MERGE_TREE=$(git rev-parse HEAD^{tree})"
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.27'
+          cache: false
+      - name: Exact format and evidence pins
+        run: |
+          gofmt -d eth/downloader/resultstore.go eth/downloader/queue.go eth/downloader/downloader.go eth/downloader/downloader_test.go eth/downloader/bal_import_arrival_causal_test.go eth/downloader/bal_grace_policy_test.go | tee /tmp/bal-grace-format.diff
+          test ! -s /tmp/bal-grace-format.diff
+          sha256sum eth/downloader/queue.go eth/downloader/resultstore.go eth/downloader/bal_grace_policy_test.go
+      - name: Protected core ancestry and independent causal predecessor
+        run: |
+          go test ./core -run '^(TestBALFinalityMultiwindowInsertChain|TestBALReconstructionFinalityForkImport|TestBALReconstructionRejectsBrokenSkeletonChain)$' -count=1
+          go test ./eth/downloader -run '^TestBALImportTimeAvailabilityCausalSeparator$' -count=1 -timeout=15m
+      - name: Bounded grace timing and nonresponse admission test
+        run: |
+          set -o pipefail
+          go test ./eth/downloader -run '^TestBALBoundedGraceProtectedPolicy$' -count=1 -v -timeout=20m | tee /tmp/bal-grace-policy.log
+          grep 'MG_BAL_GRACE_ARM' /tmp/bal-grace-policy.log > /tmp/bal-grace-rows.txt
+          test "$(wc -l < /tmp/bal-grace-rows.txt)" -eq 5
+          grep 'MG_BAL_GRACE_VERDICT' /tmp/bal-grace-policy.log
+      - name: Legacy peer and real loopback TCP regressions
+        run: |
+          go test ./eth -run '^(TestBALDownloaderLegacyPeerForcesFallback|TestBALRealLoopbackTCPDownloaderPaired)$' -count=1 -timeout=15m
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: ethereum-bal-grace-policy-v5-evidence
+          path: |
+            /tmp/bal-grace-policy.log
+            /tmp/bal-grace-rows.txt
+            /tmp/bal-grace-format.diff
+          if-no-files-found: ignore
