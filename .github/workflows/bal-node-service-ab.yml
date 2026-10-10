@@ -1,0 +1,52 @@
+name: BAL Node-Service A/B Qualification
+
+on:
+  push:
+    branches:
+      - bal-node-service-ab-v1
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  bounded-node-ab:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Pin current upstream ancestry fix in disposable worktree
+        run: |
+          git config user.name "Metalogic Research CI"
+          git config user.email "ci@mathgraph.org"
+          git fetch --no-tags https://github.com/ethereum/go-ethereum.git 3a6c2e3b35ef8caa3d39dcbea3fe9f09099cca8c
+          git merge --no-edit FETCH_HEAD
+          git merge-base --is-ancestor 3a6c2e3b35ef8caa3d39dcbea3fe9f09099cca8c HEAD
+          echo "exact merged commit=$(git rev-parse HEAD)"
+          echo "exact merged tree=$(git rev-parse HEAD^{tree})"
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.27'
+          cache: false
+      - name: Format and protected baseline
+        run: |
+          gofmt -d eth/bal_node_service_ab_test.go | tee /tmp/format.diff
+          test ! -s /tmp/format.diff
+          go test ./core -run '^(TestBALFinalityMultiwindowInsertChain|TestBALReconstructionFinalityForkImport|TestBALReconstructionRejectsBrokenSkeletonChain)$' -count=1 -v
+      - name: Two-order node-service A/B and persistent restart
+        run: |
+          set -o pipefail
+          go test ./eth -run '^TestBALNodeServicePairedImportAndRestart$' -count=1 -v -timeout=35m | tee /tmp/bal-node-ab.log
+          grep 'MG_NODE_AB_EVIDENCE' /tmp/bal-node-ab.log > /tmp/bal-node-ab-records.txt
+          test "$(wc -l < /tmp/bal-node-ab-records.txt)" -eq 4
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: bal-node-service-ab-evidence
+          path: |
+            /tmp/bal-node-ab.log
+            /tmp/bal-node-ab-records.txt
+            /tmp/format.diff
+          if-no-files-found: ignore
