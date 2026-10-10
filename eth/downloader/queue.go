@@ -211,6 +211,9 @@ type queue struct {
 	closed bool
 
 	logTime time.Time // Time instance when status was last reported
+
+	// Fork-only research hook: emitted after BAL hash/decode validation and successful result attachment.
+	balAttachHook func(uint64)
 }
 
 // newQueue creates a new download queue for scheduling block retrieval.
@@ -1067,6 +1070,9 @@ func (q *queue) DeliverBALs(id string, bals []rlp.RawValue, hashes []common.Hash
 			res.SetBAL(list)
 			res.SetBALDone()
 			accepted++
+			if q.balAttachHook != nil {
+				q.balAttachHook(header.Number.Uint64())
+			}
 		}
 		delete(q.balTaskPool, hash)
 	}
