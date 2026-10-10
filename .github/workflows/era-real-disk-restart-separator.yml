@@ -1,0 +1,65 @@
+name: MathGraph ERA Real Disk Restart Separator
+
+on:
+  push:
+    branches:
+      - era-real-disk-restart-separator-v1
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  disk-restart:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.27'
+          cache: false
+      - name: Preserve exact test source and published source boundary
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p mathgraph-evidence
+          gofmt -w core/rawdb/mathgraph_era_real_disk_restart_test.go
+          {
+            printf 'commit=%s\n' "$(git rev-parse HEAD)"
+            go version
+            sha256sum core/rawdb/mathgraph_era_real_disk_restart_test.go
+            echo 'Test-only core.NewBlockChain and real LevelDB Close/Reopen.'
+            echo 'Sepolia genesis identity and published ERA checksum; not production node sync.'
+            echo 'No upstream PRs or maintainer contact.'
+          } | tee mathgraph-evidence/manifest.txt
+      - name: Exact disk restart separator with conservative negative control
+        shell: bash
+        run: |
+          set -euo pipefail
+          go test ./core/rawdb -run '^TestMathGraphERACoreRealDiskRestartIdentifiesCanonicalGenesisResidual$' -count=3 -timeout=10m -v | tee mathgraph-evidence/disk-separator.txt
+          grep -q 'CONFIRMED_ERA_RESTART_GENESIS_COEXISTENCE_RESIDUAL' mathgraph-evidence/disk-separator.txt
+      - name: Disk restart under race detector
+        shell: bash
+        run: |
+          set -euo pipefail
+          go test -race ./core/rawdb -run '^TestMathGraphERACoreRealDiskRestartIdentifiesCanonicalGenesisResidual$' -count=2 -timeout=10m | tee mathgraph-evidence/race.txt
+      - name: Retain previous real core startup and certificate controls
+        shell: bash
+        run: |
+          set -euo pipefail
+          go test ./core/rawdb -run '^TestMathGraphEra(RealCore|Restart)' -count=1 -timeout=10m | tee mathgraph-evidence/ancestors.txt
+      - name: Full archive database package suites
+        shell: bash
+        run: |
+          set -euo pipefail
+          go test ./core/rawdb ./core/rawdb/eradb -count=1 -timeout=10m | tee mathgraph-evidence/packages.txt
+      - name: Upload sealed evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: mathgraph-era-real-disk-restart-separator
+          path: mathgraph-evidence/
+          if-no-files-found: error
