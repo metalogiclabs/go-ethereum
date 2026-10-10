@@ -1,0 +1,79 @@
+name: MathGraph Authenticated ERA Segment Gate
+
+on:
+  push:
+    branches:
+      - era-anchored-contiguous-segment-v1
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  segment-qualification:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.27'
+          cache: false
+      - name: Seal exact test source and verification boundary
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p mathgraph-evidence
+          {
+            printf 'commit=%s\n' "$(git rev-parse HEAD)"
+            go version
+            sha256sum core/rawdb/mathgraph_era_contiguous_segment_test.go
+            sha256sum core/rawdb/mathgraph_era_noimport_readthrough_test.go
+            sha256sum core/rawdb/mathgraph_era_certified_materialization_test.go
+            echo 'TRUST: anchored local Sepolia fixture at block 175881, not independently established canonical finality.'
+            echo 'SCOPE: private fork, test-only reader overlay, no upstream PR/comment, no production changes.'
+          } | tee mathgraph-evidence/manifest.txt
+          gofmt -d core/rawdb/mathgraph_era_contiguous_segment_test.go | tee mathgraph-evidence/gofmt-diff.txt
+          test ! -s mathgraph-evidence/gofmt-diff.txt
+      - name: Two-block parent-proof and reversed-header-range API
+        shell: bash
+        run: |
+          set -euo pipefail
+          go test ./core/rawdb -run '^TestMathGraphEraVerifiedTwoBlockAncestryReadThrough$' -count=10 -v | tee mathgraph-evidence/two-block.txt
+          grep -q 'VERIFIED_TWO_BLOCK_NO_IMPORT_CHAIN' mathgraph-evidence/two-block.txt
+      - name: Missing, forked, corrupt and conflicting history controls
+        shell: bash
+        run: |
+          set -euo pipefail
+          go test ./core/rawdb -run '^TestMathGraphEraVerifiedSegmentRejectsBrokenLineage$' -count=10 -v | tee mathgraph-evidence/rejections.txt
+          grep -q 'REJECTED_UNWARRANTED_ERA_LINEAGE' mathgraph-evidence/rejections.txt
+      - name: Three-block extension and no fabricated BAL capability
+        shell: bash
+        run: |
+          set -euo pipefail
+          go test ./core/rawdb -run '^TestMathGraphEraVerifiedThreeBlockChain$' -count=10 -v | tee mathgraph-evidence/three-block.txt
+          grep -q 'VERIFIED_THREE_BLOCK_ANCESTRY' mathgraph-evidence/three-block.txt
+      - name: Race detector on all ancestry tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          go test -race ./core/rawdb -run '^TestMathGraphEraVerified(TwoBlockAncestryReadThrough|SegmentRejectsBrokenLineage|ThreeBlockChain)$' -count=3 -v | tee mathgraph-evidence/race.txt
+      - name: Preserve single-block and prior negative controls
+        shell: bash
+        run: |
+          set -euo pipefail
+          go test ./core/rawdb -run '^TestMathGraph' -count=1 | tee mathgraph-evidence/all-mathgraph-tests.txt
+      - name: Full existing rawdb and ERA reader package suites
+        shell: bash
+        run: |
+          set -euo pipefail
+          go test ./core/rawdb ./core/rawdb/eradb -count=1 | tee mathgraph-evidence/packages.txt
+      - name: Upload evidence to Metalogic fork only
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: mathgraph-era-anchored-contiguous-segment
+          path: mathgraph-evidence/
+          if-no-files-found: error
