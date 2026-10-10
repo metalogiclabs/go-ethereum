@@ -47,7 +47,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          gofmt -l core/bal_protected_continuation_test.go core/bal_finalized_import_bench_test.go | tee evidence/gofmt.txt
+          gofmt -l core/bal_protected_continuation_test.go core/bal_finalized_import_bench_test.go eth/bal_node_service_ab_test.go | tee evidence/gofmt.txt
           test ! -s evidence/gofmt.txt
       - name: Protected-future and negative-control tests
         shell: bash
@@ -59,6 +59,28 @@ jobs:
         run: |
           set -euo pipefail
           go test ./core -count=1 -timeout=35m 2>&1 | tee evidence/full-core-tests.txt
+      - name: Real Geth node-service composition and future receipt test
+        shell: bash
+        run: |
+          set -euo pipefail
+          go test ./eth -run '^(TestBALNodeServicePairedImportAndRestart|TestBALNodeServiceFinalizedContinuation)        shell: bash
+        run: |
+          set -euo pipefail
+          go test -race ./core -run '^TestBALFinalityWindowConcurrentForkQueries$' -count=1 -timeout=20m 2>&1 | tee evidence/race-tests.txt
+      - name: Current-head equal-fixture importer A/B
+        shell: bash
+        run: |
+          set -euo pipefail
+          go test ./core -run '^$' -bench '^BenchmarkFinalizedBALBlockImport$' -benchtime=3x -count=2 -benchmem -timeout=35m 2>&1 | tee evidence/bench.txt
+      - name: Seal scoped evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: bal-protected-future-oct10-${{ github.sha }}
+          path: evidence/
+          retention-days: 30
+          if-no-files-found: warn
+ -count=1 -v -timeout=35m 2>&1 | tee evidence/node-service-tests.txt
       - name: Concurrent proof-cache negative controls
         shell: bash
         run: |
