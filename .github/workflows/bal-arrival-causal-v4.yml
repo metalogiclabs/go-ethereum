@@ -1,32 +1,63 @@
 name: BAL Causal Arrival V4
+
 on:
   push:
-    branches: [bal-import-arrival-causal-v4]
+    branches:
+      - bal-import-arrival-causal-v4
   workflow_dispatch:
+
 permissions:
   contents: read
+
 jobs:
-  verify:
+  qualify:
     runs-on: ubuntu-latest
-    timeout-minutes: 40
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Pin post-35930 official upstream in disposable worktree
+        run: |
+          git config user.name "Metalogic Research CI"
+          git config user.email "ci@mathgraph.org"
+          git fetch --no-tags https://github.com/ethereum/go-ethereum.git 3a6c2e3b35ef8caa3d39dcbea3fe9f09099cca8c
+          git merge --no-edit FETCH_HEAD
+          git merge-base --is-ancestor 3a6c2e3b35ef8caa3d39dcbea3fe9f09099cca8c HEAD
+          echo "MG_BAL_CAUSAL_MERGE_COMMIT=$(git rev-parse HEAD)"
+          echo "MG_BAL_CAUSAL_MERGE_TREE=$(git rev-parse HEAD^{tree})"
       - uses: actions/setup-go@v5
         with:
           go-version: '1.27'
           cache: false
-      - name: Canonical formatting
+      - name: Frozen source formatting and hash pins
         run: |
           gofmt -d eth/downloader/downloader.go eth/downloader/queue.go eth/downloader/downloader_test.go eth/downloader/bal_import_arrival_causal_test.go | tee /tmp/fmt.diff
           test ! -s /tmp/fmt.diff
-      - name: Paired causal test
+          sha256sum eth/downloader/downloader.go eth/downloader/queue.go eth/downloader/downloader_test.go eth/downloader/bal_import_arrival_causal_test.go
+      - name: Independent fork and finalized ancestry controls
+        run: |
+          go test ./core -run '^(TestBALFinalityMultiwindowInsertChain|TestBALReconstructionFinalityForkImport|TestBALReconstructionRejectsBrokenSkeletonChain)$' -count=1 -v
+      - name: Exact BAL attachment versus importer snapshot and controlled delay
         run: |
           set -o pipefail
           go test ./eth/downloader -run '^TestBALImportTimeAvailabilityCausalSeparator$' -count=1 -v -timeout=15m | tee /tmp/bal-causal.log
+          grep 'MG_BAL_CAUSAL_SUMMARY' /tmp/bal-causal.log > /tmp/bal-causal-summary.txt
+          grep 'MG_BAL_CAUSAL_ROWS' /tmp/bal-causal.log > /tmp/bal-causal-rows.txt
+          test "$(wc -l < /tmp/bal-causal-summary.txt)" -eq 2
+          test "$(wc -l < /tmp/bal-causal-rows.txt)" -eq 2
+          grep 'MG_BAL_CAUSAL_VERDICT' /tmp/bal-causal.log
+      - name: Preserve existing downloader and TCP negative controls
+        run: |
+          go test ./eth/downloader -run '^(TestBALSynchronisationFull|TestBALSynchronisationLegacyPeer)$' -count=1 -timeout=15m
+          go test ./eth -run '^(TestBALDownloaderLegacyPeerForcesFallback|TestBALRealLoopbackTCPDownloaderPaired)$' -count=1 -timeout=15m
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: bal-arrival-causal-v4-evidence
+          name: bal-import-arrival-causal-v4-evidence
           path: |
             /tmp/bal-causal.log
+            /tmp/bal-causal-summary.txt
+            /tmp/bal-causal-rows.txt
             /tmp/fmt.diff
+          if-no-files-found: ignore
