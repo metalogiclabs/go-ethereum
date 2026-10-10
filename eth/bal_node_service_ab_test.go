@@ -127,6 +127,8 @@ func openBALNodeAB(t *testing.T, dir string, genesis *core.Genesis, reconstruct 
 	cfg.TxPool.NoLocals = true
 	cfg.BlobPool.Datadir = ""
 	cfg.BALStateReconstruction = reconstruct
+	cfg.EthDiscoveryURLs = nil
+	cfg.SnapDiscoveryURLs = nil
 	service, err := New(stack, &cfg)
 	if err != nil {
 		stack.Close()
