@@ -4,6 +4,9 @@ on:
   push:
     branches:
       - bal-protected-continuation-oct10-v1
+  pull_request:
+    branches:
+      - bal-oct10-master-integrated-v1
   workflow_dispatch:
 
 permissions:
