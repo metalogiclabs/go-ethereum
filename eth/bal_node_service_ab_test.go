@@ -26,19 +26,19 @@ import (
 )
 
 type balNodeABObservation struct {
-	Round int `json:"round"`
-	Mode string `json:"mode"`
-	Head string `json:"head"`
-	StateRoot string `json:"state_root"`
-	Counter uint64 `json:"counter"`
-	ReceiptCount int `json:"receipt_count"`
-	ReopenedReceipts int `json:"reopened_receipts"`
-	ImportWallNS int64 `json:"import_wall_ns"`
-	TotalLifecycleNS int64 `json:"total_lifecycle_ns"`
-	DataDirBytes int64 `json:"datadir_bytes"`
-	Blocks int `json:"blocks"`
-	TxBearingBlocks int `json:"tx_bearing_blocks"`
-	RestartVerified bool `json:"restart_verified"`
+	Round            int    `json:"round"`
+	Mode             string `json:"mode"`
+	Head             string `json:"head"`
+	StateRoot        string `json:"state_root"`
+	Counter          uint64 `json:"counter"`
+	ReceiptCount     int    `json:"receipt_count"`
+	ReopenedReceipts int    `json:"reopened_receipts"`
+	ImportWallNS     int64  `json:"import_wall_ns"`
+	TotalLifecycleNS int64  `json:"total_lifecycle_ns"`
+	DataDirBytes     int64  `json:"datadir_bytes"`
+	Blocks           int    `json:"blocks"`
+	TxBearingBlocks  int    `json:"tx_bearing_blocks"`
+	RestartVerified  bool   `json:"restart_verified"`
 }
 
 // One fixed fixture is supplied unchanged to each arm, including its chain,
@@ -56,13 +56,13 @@ func makeBALNodeABCorpus(t *testing.T) (*core.Genesis, []*types.Block, common.Ad
 	fork.AmsterdamTime = &zero
 	fork.BogotaTime = nil
 	genesis := &core.Genesis{
-		Config: &fork,
-		GasLimit: 30_000_000,
+		Config:     &fork,
+		GasLimit:   30_000_000,
 		Difficulty: common.Big0,
-		BaseFee: big.NewInt(params.InitialBaseFee),
+		BaseFee:    big.NewInt(params.InitialBaseFee),
 		Alloc: types.GenesisAlloc{
-			from: {Balance: new(big.Int).Mul(big.NewInt(100000), big.NewInt(params.Ether))},
-			contract: {Balance: common.Big0, Code: common.FromHex("0x60005460010160005500")},
+			from:                      {Balance: new(big.Int).Mul(big.NewInt(100000), big.NewInt(params.Ether))},
+			contract:                  {Balance: common.Big0, Code: common.FromHex("0x60005460010160005500")},
 			params.BeaconRootsAddress: {Code: params.BeaconRootsCode},
 		},
 	}
@@ -73,11 +73,11 @@ func makeBALNodeABCorpus(t *testing.T) (*core.Genesis, []*types.Block, common.Ad
 			return
 		}
 		tx, err := types.SignTx(types.NewTx(&types.DynamicFeeTx{
-			ChainID: fork.ChainID,
-			Nonce: g.TxNonce(from),
-			To: &contract,
-			Value: common.Big0,
-			Gas: 500000,
+			ChainID:   fork.ChainID,
+			Nonce:     g.TxNonce(from),
+			To:        &contract,
+			Value:     common.Big0,
+			Gas:       500000,
 			GasFeeCap: big.NewInt(1_000_000_000_000),
 			GasTipCap: big.NewInt(1_000_000_000),
 		}), g.Signer(), key)
@@ -101,10 +101,10 @@ func makeBALNodeABCorpus(t *testing.T) (*core.Genesis, []*types.Block, common.Ad
 func openBALNodeAB(t *testing.T, dir string, genesis *core.Genesis, reconstruct bool) (*node.Node, *Ethereum) {
 	t.Helper()
 	stack, err := node.New(&node.Config{
-		Name: "bal-node-ab",
+		Name:    "bal-node-ab",
 		DataDir: dir,
 		IPCPath: "",
-		P2P: p2p.Config{NoDiscovery: true, ListenAddr: "127.0.0.1:0", MaxPeers: 0},
+		P2P:     p2p.Config{NoDiscovery: true, ListenAddr: "127.0.0.1:0", MaxPeers: 0},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -215,10 +215,10 @@ func balNodeABRun(t *testing.T, round int, reconstruct bool, genesis *core.Genes
 	return balNodeABObservation{
 		Round: round, Mode: mode, Head: blocks[len(blocks)-1].Hash().Hex(),
 		StateRoot: blocks[len(blocks)-1].Root().Hex(),
-		Counter: uint64(txBlocks), ReceiptCount: receipts,
+		Counter:   uint64(txBlocks), ReceiptCount: receipts,
 		ReopenedReceipts: reopenedReceipts, ImportWallNS: importElapsed.Nanoseconds(),
 		TotalLifecycleNS: time.Since(lifecycleStart).Nanoseconds(),
-		DataDirBytes: balNodeABDiskBytes(t, dir), Blocks: len(blocks),
+		DataDirBytes:     balNodeABDiskBytes(t, dir), Blocks: len(blocks),
 		TxBearingBlocks: txBlocks, RestartVerified: true,
 	}
 }
