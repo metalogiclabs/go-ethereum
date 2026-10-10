@@ -1,0 +1,88 @@
+name: MathGraph Certified ERA Restart Binding
+
+on:
+  push:
+    branches:
+      - era-certified-restart-binding-v1
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  guarded-boot:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.27'
+          cache: false
+      - name: Identify exact research source and scope
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p mathgraph-evidence
+          gofmt -w core/rawdb/mathgraph_era_restart_binding_test.go
+          {
+            printf 'commit=%s\n' "$(git rev-parse HEAD)"
+            go version
+            sha256sum core/rawdb/mathgraph_era_restart_binding_test.go
+            echo 'Scope: test-only guarded initializer, no production code or Geth startup hook installed.'
+            echo 'Authority: published Sepolia ERA1 SHA-256 + genesis; NOT proof of consensus finality.'
+            echo 'No upstream PR, comments, maintainer requests, or direct contact.'
+          } | tee mathgraph-evidence/manifest.txt
+      - name: Require independently published archive bytes
+        shell: bash
+        run: |
+          set -euo pipefail
+          printf '%s  %s\n' 'ab7f6d4f4eba0267406f783b75accc7a93dece520242d04fed27b0af51d79242' 'core/rawdb/eradb/testdata/sepolia-00000-643a00f7.era1' | sha256sum -c - | tee mathgraph-evidence/publisher-checksum.txt
+      - name: Durable archive binding and repeated guarded boot
+        shell: bash
+        run: |
+          set -euo pipefail
+          go test ./core/rawdb -run '^TestMathGraphEraRestartCertificateAllowsGuardedReattachment$' -count=4 -v | tee mathgraph-evidence/positive.txt
+          grep -q 'VERIFIED_ERA_DURABLE_ARCHIVE_BINDING' mathgraph-evidence/positive.txt
+      - name: Missing archive, modified bytes and forged certificate controls
+        shell: bash
+        run: |
+          set -euo pipefail
+          go test ./core/rawdb -run '^TestMathGraphEraRestartBindingRejectsMissingOrChangedArchive$' -count=4 -v | tee mathgraph-evidence/mismatch.txt
+          grep -q 'REJECTED_ERA_RESTART_WITHOUT_MATCHING_ARCHIVE_OR_CERTIFICATE' mathgraph-evidence/mismatch.txt
+      - name: Existing unguarded native metadata must be rejected
+        shell: bash
+        run: |
+          set -euo pipefail
+          go test ./core/rawdb -run '^TestMathGraphEraRestartBindingDetectsOrphanedMetadata$' -count=4 -v | tee mathgraph-evidence/orphan.txt
+          grep -q 'REJECTED_UNGUARDED_ERA_HEAD_WITHOUT_PROVENANCE' mathgraph-evidence/orphan.txt
+      - name: Crash after certificate before native index creation
+        shell: bash
+        run: |
+          set -euo pipefail
+          go test ./core/rawdb -run '^TestMathGraphEraRestartBindingRecoversCertificateOnlyCrash$' -count=4 -v | tee mathgraph-evidence/crash-recover.txt
+          grep -q 'VERIFIED_ERA_CERTIFICATE_ONLY_RESTART_RECOVERY' mathgraph-evidence/crash-recover.txt
+      - name: Race qualification
+        shell: bash
+        run: |
+          set -euo pipefail
+          go test -race ./core/rawdb -run '^TestMathGraphEraRestart' -count=2 | tee mathgraph-evidence/race.txt
+      - name: Retain every previous MathGraph ERA witness
+        shell: bash
+        run: |
+          set -euo pipefail
+          go test ./core/rawdb -run '^TestMathGraph' -count=1 | tee mathgraph-evidence/lineage.txt
+      - name: Full rawdb and ERA reader package suites
+        shell: bash
+        run: |
+          set -euo pipefail
+          go test ./core/rawdb ./core/rawdb/eradb -count=1 | tee mathgraph-evidence/packages.txt
+      - name: Save evidence to the Metalogic fork only
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: mathgraph-era-certified-restart-binding
+          path: mathgraph-evidence/
+          if-no-files-found: error
