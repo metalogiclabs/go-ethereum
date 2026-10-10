@@ -156,6 +156,26 @@ func (r *resultStore) HasCompletedItems() bool {
 	return false
 }
 
+// CompletedMissingBALs returns the count of currently deliverable blocks which
+// were assigned a best-effort BAL request but do not have an authenticated BAL.
+// It is a read-only, capped peek; no item leaves the queue.
+// Fork-only research policy consumer, inactive under the normal configuration.
+func (r *resultStore) CompletedMissingBALs(limit int) int {
+	r.lock.RLock()
+	defer r.lock.RUnlock()
+
+	missing := 0
+	for i, item := range r.items {
+		if i >= limit || item == nil || !item.AllDone() {
+			break
+		}
+		if item.pending.Load()&(1<<balType) != 0 {
+			missing++
+		}
+	}
+	return missing
+}
+
 // countCompleted returns the number of items ready for delivery, stopping at
 // the first non-complete item.
 //
