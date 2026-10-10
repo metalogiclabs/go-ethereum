@@ -1,0 +1,79 @@
+name: MathGraph Real Core Startup on Certified ERA Prefix
+
+on:
+  push:
+    branches:
+      - era-core-newblockchain-startup-v1
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  real-chain-startup:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.27'
+          cache: false
+      - name: Seal test-only source and exact verification boundary
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p mathgraph-evidence
+          gofmt -w core/rawdb/mathgraph_era_core_newblockchain_test.go
+          {
+            printf 'commit=%s\n' "$(git rev-parse HEAD)"
+            go version
+            sha256sum core/rawdb/mathgraph_era_core_newblockchain_test.go
+            sha256sum core/rawdb/mathgraph_era_restart_binding_test.go
+            echo 'Authority: independently published ERA1 fixture checksum and Sepolia genesis identity.'
+            echo 'Test-only guarded overlay; this checks core.NewBlockChain, NOT a Geth network node or sync.'
+            echo 'No upstream comments, PRs, requested reviewers, or other maintainer contact.'
+          } | tee mathgraph-evidence/source.txt
+      - name: Publisher archive checksum
+        shell: bash
+        run: |
+          set -euo pipefail
+          printf '%s  %s\n' 'ab7f6d4f4eba0267406f783b75accc7a93dece520242d04fed27b0af51d79242' 'core/rawdb/eradb/testdata/sepolia-00000-643a00f7.era1' | sha256sum -c - | tee mathgraph-evidence/era0-sha256.txt
+      - name: Real NewBlockChain constructor with virtual history
+        shell: bash
+        run: |
+          set -euo pipefail
+          go test ./core/rawdb -run '^TestMathGraphEraRealCoreNewBlockChainStartup$' -timeout 10m -count=3 -v | tee mathgraph-evidence/real-constructor.txt
+          grep -q 'QUALIFIED_REAL_CORE_BLOCKCHAIN_STARTUP' mathgraph-evidence/real-constructor.txt
+      - name: Negative control archive missing before startup
+        shell: bash
+        run: |
+          set -euo pipefail
+          go test ./core/rawdb -run '^TestMathGraphEraRealCoreStartupRequiresSourceBeforeConstructor$' -timeout 10m -count=3 -v | tee mathgraph-evidence/missing-archive.txt
+          grep -q 'REJECTED_CORE_STARTUP_WITHOUT_PUBLISHER_VERIFIED_ARCHIVE' mathgraph-evidence/missing-archive.txt
+      - name: Native constructor rejects wrong network genesis
+        shell: bash
+        run: |
+          set -euo pipefail
+          go test ./core/rawdb -run '^TestMathGraphEraRealCoreStartupGenesisConflictFailsClosed$' -timeout 10m -count=3 -v | tee mathgraph-evidence/genesis-reject.txt
+          grep -q 'REJECTED_REAL_CORE_BLOCKCHAIN_GENESIS_MISMATCH' mathgraph-evidence/genesis-reject.txt
+      - name: Race detector for real core startup and protections
+        shell: bash
+        run: |
+          set -euo pipefail
+          go test -race ./core/rawdb -run '^TestMathGraphEraRealCore' -timeout 10m -count=2 | tee mathgraph-evidence/real-core-race.txt
+      - name: Preserve predecessor experiment and rawdb reader suites
+        shell: bash
+        run: |
+          set -euo pipefail
+          go test ./core/rawdb -run '^TestMathGraph' -timeout 10m -count=1 | tee mathgraph-evidence/lineage.txt
+          go test ./core/rawdb ./core/rawdb/eradb -timeout 10m -count=1 | tee mathgraph-evidence/rawdb-packages.txt
+      - name: Evidence artifact in Metalogic fork only
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: mathgraph-real-core-newblockchain-era-evidence
+          path: mathgraph-evidence/
+          if-no-files-found: error
