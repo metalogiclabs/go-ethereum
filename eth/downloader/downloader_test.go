@@ -152,6 +152,8 @@ type downloadTesterPeer struct {
 	corruptBodies  bool     // if set, the peer serves incorrect blocks
 	balGate        *balGate // if set, body deliveries wait for the access lists
 	announceLag    uint64   // blocks the announced latest trails the real head by
+	balDelayUntil  <-chan struct{} // Fork-only test: hold BAL replies until released
+	balRequests    atomic.Uint64 // Fork-only test: count requested BAL batches
 	id             string
 	chain          *core.BlockChain
 
@@ -416,6 +418,7 @@ func (dlp *downloadTesterPeer) RequestReceipts(hashes []common.Hash, gasUsed []u
 // particular peer in the download tester. The returned function can be used to
 // retrieve batches of block access lists from the particularly requested peer.
 func (dlp *downloadTesterPeer) RequestBALs(hashes []common.Hash, sink chan *eth.Response) (*eth.Request, error) {
+	dlp.balRequests.Add(1)
 	var (
 		bals   = make([]rlp.RawValue, 0, len(hashes))
 		served = make([]common.Hash, 0, len(hashes))
@@ -448,6 +451,9 @@ func (dlp *downloadTesterPeer) RequestBALs(hashes []common.Hash, sink chan *eth.
 		Done: make(chan error, 1),
 	}
 	go func() {
+		if dlp.balDelayUntil != nil {
+			<-dlp.balDelayUntil
+		}
 		sink <- res
 
 		// If gated, unblock the body deliveries of the served blocks, but only
