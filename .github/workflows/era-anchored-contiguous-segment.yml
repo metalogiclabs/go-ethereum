@@ -35,8 +35,7 @@ jobs:
             echo 'TRUST: anchored local Sepolia fixture at block 175881, not independently established canonical finality.'
             echo 'SCOPE: private fork, test-only reader overlay, no upstream PR/comment, no production changes.'
           } | tee mathgraph-evidence/manifest.txt
-          gofmt -d core/rawdb/mathgraph_era_contiguous_segment_test.go | tee mathgraph-evidence/gofmt-diff.txt
-          # Canonical formatting changes only whitespace in the test-only fixture.
+          # Normalize whitespace in this test-only source, recording exact executed bytes.
           gofmt -w core/rawdb/mathgraph_era_contiguous_segment_test.go
           sha256sum core/rawdb/mathgraph_era_contiguous_segment_test.go | tee mathgraph-evidence/qualified-source-sha256.txt
           test -z "$(gofmt -l core/rawdb/mathgraph_era_contiguous_segment_test.go)"
