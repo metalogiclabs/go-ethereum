@@ -149,11 +149,11 @@ func (dl *downloadTester) dropPeer(id string) {
 type downloadTesterPeer struct {
 	dl             *downloadTester
 	withholdBodies map[common.Hash]struct{}
-	corruptBodies  bool     // if set, the peer serves incorrect blocks
-	balGate        *balGate // if set, body deliveries wait for the access lists
-	announceLag    uint64   // blocks the announced latest trails the real head by
+	corruptBodies  bool            // if set, the peer serves incorrect blocks
+	balGate        *balGate        // if set, body deliveries wait for the access lists
+	announceLag    uint64          // blocks the announced latest trails the real head by
 	balDelayUntil  <-chan struct{} // Fork-only test: hold BAL replies until released
-	balRequests    atomic.Uint64 // Fork-only test: count requested BAL batches
+	balRequests    atomic.Uint64   // Fork-only test: count requested BAL batches
 	id             string
 	chain          *core.BlockChain
 
