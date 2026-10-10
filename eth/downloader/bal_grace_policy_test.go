@@ -46,6 +46,7 @@ type balGraceOutcome struct {
 	ExpiredWaitCalls      int     `json:"expired_wait_calls"`
 	WaitDurationMS        float64 `json:"wait_duration_ms"`
 	MaxOneWaitMS          float64 `json:"max_one_wait_ms"`
+	ChargedBudgetMS       float64 `json:"charged_budget_ms"`
 	PeerReleasedAfterHead bool    `json:"peer_released_after_head"`
 	HeadBeforeRelease     bool    `json:"head_before_release"`
 }
@@ -81,6 +82,7 @@ func runBALGraceArm(t *testing.T, cfg balGraceCase, genesis *core.Genesis, servi
 	var readyOnce sync.Once
 	q := tester.downloader.queue
 	q.balGraceWindow = cfg.window
+	q.balGraceRequireInFlight = true
 	q.balBatchReadyHook = func() {
 		readyOnce.Do(func() { ready <- struct{}{} })
 	}
@@ -244,6 +246,7 @@ func runBALGraceArm(t *testing.T, cfg balGraceCase, genesis *core.Genesis, servi
 	result.ExpiredWaitCalls = events.expired
 	result.WaitDurationMS = float64(events.total) / float64(time.Millisecond)
 	result.MaxOneWaitMS = float64(events.maxWait) / float64(time.Millisecond)
+	result.ChargedBudgetMS = float64(q.balGraceSpent) / float64(time.Millisecond)
 	dup := events.duplicateImports
 	events.Unlock()
 	if dup != 0 || result.Executed+result.Reconstructed != len(blocks) {
@@ -251,6 +254,9 @@ func runBALGraceArm(t *testing.T, cfg balGraceCase, genesis *core.Genesis, servi
 	}
 	// Hard policy cap is 25ms, with generous allowance for CI preemption.
 	// A serious wait overrun cannot be promoted as a viable bounded policy.
+	if result.ChargedBudgetMS > 25.00001 {
+		t.Fatalf("%s: global BAL waiting budget overrun: %+v", cfg.name, result)
+	}
 	if result.MaxOneWaitMS > 1000 {
 		t.Fatalf("%s: observed grace wait exceeded liveness guard: %+v", cfg.name, result)
 	}
@@ -311,14 +317,44 @@ func TestBALBoundedGraceProtectedPolicy(t *testing.T) {
 	if late.Reconstructed != 0 || late.ExpiredWaitCalls == 0 || !late.HeadBeforeRelease {
 		t.Fatalf("late peer must execute and time out before release: %+v", late)
 	}
-	if legacy.Reconstructed != 0 || legacy.BALRequests != 0 || legacy.Executed != len(blocks) {
+	if legacy.Reconstructed != 0 || legacy.BALRequests != 0 || legacy.Executed != len(blocks) || legacy.WaitCalls != 0 {
 		t.Fatalf("legacy peer did not safely execute all blocks: %+v", legacy)
 	}
 	if early.Reconstructed != len(blocks) || early.ExpiredWaitCalls != 0 {
 		t.Fatalf("already-available authenticated BALs did not take correct path: %+v", early)
 	}
 	t.Logf("MG_BAL_GRACE_VERDICT %s",
-		fmt.Sprintf("immediate=%d/%d grace=%d/%d late=%d/%d legacy=%d/%d early=%d/%d; bounded-per-batch<=25ms",
+		fmt.Sprintf("immediate=%d/%d grace=%d/%d late=%d/%d legacy=%d/%d early=%d/%d; global-wait-budget<=25ms legacy-waits=%d", 
 			immediate.Reconstructed, len(blocks), grace.Reconstructed, len(blocks),
-			late.Reconstructed, len(blocks), legacy.Reconstructed, len(blocks), early.Reconstructed, len(blocks)))
+			late.Reconstructed, len(blocks), legacy.Reconstructed, len(blocks), early.Reconstructed, len(blocks), legacy.WaitCalls))
+}
+
+// This isolated policy-law test proves the waiting budget is not renewed
+// when more completed batches arrive. The synthetic queue has a ready block
+// with its authenticated BAL still pending and one actual in-flight request.
+func TestBALBoundedGraceGlobalBudgetCannotCompound(t *testing.T) {
+	q := newQueue(4, 1)
+	item := &fetchResult{Header: new(types.Header)}
+	item.pending.Store(1 << balType)
+	q.resultCache.items[0] = item
+	q.balPendPool["in-flight"] = new(fetchRequest)
+	q.balGraceWindow = 20 * time.Millisecond
+	q.balGraceRequireInFlight = true
+	starts := 0
+	q.balGraceStartHook = func(int) { starts++ }
+	start := time.Now()
+	for i := 0; i < 4; i++ {
+		q.waitForCompletedBALGrace()
+	}
+	elapsed := time.Since(start)
+	if starts != 2 {
+		t.Fatalf("expected 20ms + 5ms capped waits, got %d", starts)
+	}
+	if q.balGraceSpent != 25*time.Millisecond {
+		t.Fatalf("cumulative budget=%v, want 25ms", q.balGraceSpent)
+	}
+	if elapsed > time.Second {
+		t.Fatalf("bounded wait spent too much observed time: %v", elapsed)
+	}
+	t.Logf("MG_BAL_GRACE_GLOBAL_BUDGET windows=%d charged=%s elapsed=%s", starts, q.balGraceSpent, elapsed)
 }
