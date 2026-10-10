@@ -1,0 +1,52 @@
+name: BAL Localhost TCP Downloader A-B V3
+
+on:
+  push:
+    branches:
+      - bal-localhost-tcp-ab-v3
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  localhost-tcp-qualification:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Overlay verified post-35930 upstream commit
+        run: |
+          git config user.name "Metalogic Research CI"
+          git config user.email "ci@mathgraph.org"
+          git fetch --no-tags https://github.com/ethereum/go-ethereum.git 3a6c2e3b35ef8caa3d39dcbea3fe9f09099cca8c
+          git merge --no-edit FETCH_HEAD
+          git merge-base --is-ancestor 3a6c2e3b35ef8caa3d39dcbea3fe9f09099cca8c HEAD
+          echo "MG_ETH_TCP_MERGE_COMMIT=$(git rev-parse HEAD)"
+          echo "MG_ETH_TCP_MERGE_TREE=$(git rev-parse HEAD^{tree})"
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.27'
+          cache: false
+      - name: Check exact test-source formatting and protected controls
+        run: |
+          gofmt -d eth/bal_localhost_tcp_ab_test.go eth/bal_downloader_wire_ab_test.go eth/bal_node_service_ab_test.go | tee /tmp/format.diff
+          test ! -s /tmp/format.diff
+          go test ./core -run '^(TestBALFinalityMultiwindowInsertChain|TestBALReconstructionFinalityForkImport|TestBALReconstructionRejectsBrokenSkeletonChain)$' -count=1 -v
+      - name: Real encrypted loopback TCP peers, downloader and persistent A-B
+        run: |
+          set -o pipefail
+          go test ./eth -run '^TestBALRealLoopbackTCPDownloaderPaired$' -count=1 -v -timeout=20m | tee /tmp/bal-tcp.log
+          grep 'MG_ETH_TCP_EVIDENCE' /tmp/bal-tcp.log > /tmp/bal-tcp-records.txt
+          test "$(wc -l < /tmp/bal-tcp-records.txt)" -eq 4
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: bal-localhost-tcp-v3-evidence
+          path: |
+            /tmp/bal-tcp.log
+            /tmp/bal-tcp-records.txt
+            /tmp/format.diff
+          if-no-files-found: ignore
