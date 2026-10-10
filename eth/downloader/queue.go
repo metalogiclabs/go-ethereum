@@ -219,6 +219,8 @@ type queue struct {
 	// A grace interval is applied once per completed downloader batch, before
 	// that batch is irrevocably removed from the result cache.
 	balGraceWindow    time.Duration
+	balGraceSpent     time.Duration // Charges one global capped per-sync budget
+	balGraceRequireInFlight bool // No wait when no actual BAL request exists
 	balGraceSignal    chan struct{}
 	balGraceStartHook func(int)
 	balGraceEndHook   func(time.Duration, bool)
@@ -249,6 +251,7 @@ func (q *queue) Reset(blockCacheLimit int, thresholdInitialSize int) {
 	defer q.lock.Unlock()
 
 	q.closed = false
+	q.balGraceSpent = 0
 	q.mode = ethconfig.FullSync
 	q.headerHead = common.Hash{}
 
@@ -558,10 +561,25 @@ func (q *queue) waitForCompletedBALGrace() {
 	if missing == 0 {
 		return
 	}
-	const hardMax = 25 * time.Millisecond
+	// This check is limited to the currently pending BAL request pool.
+	// Legacy ETH/69 peers never enter that pool and should not incur a delay.
+	if q.balGraceRequireInFlight {
+		q.lock.RLock()
+		inFlight := len(q.balPendPool) > 0
+		q.lock.RUnlock()
+		if !inFlight {
+			return
+		}
+	}
+	// No more than 25ms cumulative scheduled wait across the whole sync.
+	// Spending the budget cannot be renewed by subsequent result batches.
+	const hardTotal = 25 * time.Millisecond
+	if q.balGraceSpent >= hardTotal {
+		return
+	}
 	window := q.balGraceWindow
-	if window > hardMax {
-		window = hardMax
+	if remaining := hardTotal - q.balGraceSpent; window > remaining {
+		window = remaining
 	}
 	start := time.Now()
 	if q.balGraceStartHook != nil {
@@ -587,8 +605,14 @@ grace:
 			break grace
 		}
 	}
+	elapsed := time.Since(start)
+	charged := elapsed
+	if charged > window {
+		charged = window
+	}
+	q.balGraceSpent += charged
 	if q.balGraceEndHook != nil {
-		q.balGraceEndHook(time.Since(start), exhausted)
+		q.balGraceEndHook(elapsed, exhausted)
 	}
 }
 
