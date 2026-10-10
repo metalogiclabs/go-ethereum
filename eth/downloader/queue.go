@@ -222,6 +222,7 @@ type queue struct {
 	balGraceSignal    chan struct{}
 	balGraceStartHook func(int)
 	balGraceEndHook   func(time.Duration, bool)
+	balBatchReadyHook func() // Fork-only: mandatory parts complete in both policy arms
 }
 
 // newQueue creates a new download queue for scheduling block retrieval.
@@ -485,6 +486,12 @@ func (q *queue) Results(block bool) []*fetchResult {
 		closed = q.closed
 		q.lock.Unlock()
 	}
+	// A common readiness event supports identical delayed-response scheduling in
+	// immediate and grace-enabled controls; it never changes queue behavior.
+	if block && q.balBatchReadyHook != nil && q.resultCache.HasCompletedItems() {
+		q.balBatchReadyHook()
+	}
+
 	// Research-only and disabled by default: briefly retain completed results
 	// in the cache so pending, authenticated BALs can be attached before import.
 	// Never hold q.lock while waiting, since DeliverBALs needs that lock.
