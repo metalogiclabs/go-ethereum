@@ -64,6 +64,7 @@ func (w *balWireCounter) WriteMsg(msg p2p.Msg) error {
 type balWireABObservation struct {
 	Round                         int    `json:"round"`
 	Mode                          string `json:"mode"`
+	ProtocolVersion               uint   `json:"protocol_version"`
 	Head                          string `json:"head"`
 	StateRoot                     string `json:"state_root"`
 	Counter                       uint64 `json:"counter"`
@@ -136,11 +137,14 @@ func balWireCheck(t *testing.T, chain *core.BlockChain, blocks []*types.Block, c
 // peer message stream. The source has the exact pre-generated chain and serves
 // headers, bodies and BALs; the target runs its own Geth skeleton downloader,
 // import machinery and authenticated eligibility checks.
-func balWireOneArm(t *testing.T, round int, reconstruct bool, genesis *core.Genesis, blocks []*types.Block, contract common.Address, txCount int) balWireABObservation {
+func balWireOneArm(t *testing.T, round int, reconstruct bool, genesis *core.Genesis, blocks []*types.Block, contract common.Address, txCount int, protocol uint) balWireABObservation {
 	t.Helper()
 	mode := "execute"
 	if reconstruct {
 		mode = "reconstruct"
+	}
+	if protocol < eth.ETH71 {
+		mode += "-legacy"
 	}
 	base := t.TempDir()
 	sourceStack, source := openBALNodeAB(t, filepath.Join(base, "source"), genesis, false)
@@ -161,11 +165,11 @@ func balWireOneArm(t *testing.T, round int, reconstruct bool, genesis *core.Gene
 	// must be an exact ancestor of this consensus-provided header.
 	target.BlockChain().SetFinalized(final.Header())
 
-	caps := []p2p.Cap{{Name: "eth", Version: eth.ETH71}}
+	caps := []p2p.Cap{{Name: "eth", Version: protocol}}
 	targetPipe, sourcePipe := p2p.MsgPipe()
 	sourceCounter := &balWireCounter{MsgReadWriter: sourcePipe}
-	targetPeer := eth.NewPeer(eth.ETH71, p2p.NewPeer(enode.ID{1}, "source", caps), targetPipe, target.txPool, target.blobTxPool, target.BlockChain().Config())
-	sourcePeer := eth.NewPeer(eth.ETH71, p2p.NewPeer(enode.ID{2}, "target", caps), sourceCounter, source.txPool, source.blobTxPool, source.BlockChain().Config())
+	targetPeer := eth.NewPeer(protocol, p2p.NewPeer(enode.ID{1}, "source", caps), targetPipe, target.txPool, target.blobTxPool, target.BlockChain().Config())
+	sourcePeer := eth.NewPeer(protocol, p2p.NewPeer(enode.ID{2}, "target", caps), sourceCounter, source.txPool, source.blobTxPool, source.BlockChain().Config())
 	peerErrs := make(chan error, 2)
 	go func() {
 		peerErrs <- target.handler.runEthPeer(targetPeer, func(peer *eth.Peer) error {
@@ -196,7 +200,7 @@ func balWireOneArm(t *testing.T, round int, reconstruct bool, genesis *core.Gene
 	elapsed := time.Since(start)
 	executed, executionless := balWireCheck(t, target.BlockChain(), blocks, contract, txCount)
 	observation := balWireABObservation{
-		Round: round, Mode: mode, Head: final.Hash().Hex(), StateRoot: final.Root().Hex(),
+		Round: round, Mode: mode, ProtocolVersion: protocol, Head: final.Hash().Hex(), StateRoot: final.Root().Hex(),
 		Counter: uint64(txCount), Blocks: len(blocks), TxBlocks: txCount,
 		ExecutedTxBlocks: executed, ExecutionlessTxBlocks: executionless,
 		HeaderRequests: sourceCounter.headersRequested.Load(),
@@ -206,8 +210,15 @@ func balWireOneArm(t *testing.T, round int, reconstruct bool, genesis *core.Gene
 		BodyResponses:  sourceCounter.bodiesReturned.Load(),
 		SyncWallNS:     elapsed.Nanoseconds(),
 	}
-	if observation.HeaderRequests == 0 || observation.BodyRequests == 0 || observation.BALRequests == 0 || observation.BALResponses == 0 {
-		t.Fatalf("wire coverage missing: %+v", observation)
+	if observation.HeaderRequests == 0 || observation.BodyRequests == 0 {
+		t.Fatalf("header/body wire coverage missing: %+v", observation)
+	}
+	if protocol >= eth.ETH71 {
+		if observation.BALRequests == 0 || observation.BALResponses == 0 {
+			t.Fatalf("modern BAL wire coverage missing: %+v", observation)
+		}
+	} else if observation.BALRequests != 0 || observation.BALResponses != 0 {
+		t.Fatalf("legacy peer unexpectedly provided BAL messages: %+v", observation)
 	}
 	if !reconstruct && executionless != 0 {
 		t.Fatalf("ordinary execution unexpectedly omitted receipts: %+v", observation)
@@ -251,7 +262,7 @@ func TestBALDownloaderWirePairedImportAndRestart(t *testing.T) {
 		}
 		var pair [2]balWireABObservation
 		for _, reconstruct := range order {
-			result := balWireOneArm(t, round, reconstruct, genesis, blocks, contract, txCount)
+			result := balWireOneArm(t, round, reconstruct, genesis, blocks, contract, txCount, eth.ETH71)
 			index := 0
 			if reconstruct {
 				index = 1
@@ -268,4 +279,24 @@ func TestBALDownloaderWirePairedImportAndRestart(t *testing.T) {
 		}
 		t.Logf("MG_ETH_WIRE_PAIR %s", fmt.Sprintf("round=%d execute_ns=%d reconstruct_ns=%d reconstructed_tx_blocks=%d", round, pair[0].SyncWallNS, pair[1].SyncWallNS, pair[1].ExecutionlessTxBlocks))
 	}
+}
+
+// TestBALDownloaderLegacyPeerForcesFallback is the independent negative
+// control: the candidate fast path remains enabled, but an ETH/69 wire peer
+// cannot supply BALs. Every block with transactions must execute normally,
+// preserving exact head, state, receipts and restart behavior.
+func TestBALDownloaderLegacyPeerForcesFallback(t *testing.T) {
+	genesis, blocks, contract, txCount := makeBALNodeABCorpus(t)
+	result := balWireOneArm(t, 2, true, genesis, blocks, contract, txCount, eth.ETH69)
+	if result.ExecutionlessTxBlocks != 0 || result.ExecutedTxBlocks != txCount {
+		t.Fatalf("legacy protocol failed closed incorrectly: %+v", result)
+	}
+	if result.BALRequests != 0 || result.BALResponses != 0 {
+		t.Fatalf("legacy protocol unexpectedly served BALs: %+v", result)
+	}
+	data, err := json.Marshal(result)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Logf("MG_ETH_WIRE_LEGACY_NEGATIVE %s", data)
 }
