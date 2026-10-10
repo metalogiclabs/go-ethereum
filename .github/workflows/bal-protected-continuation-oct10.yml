@@ -1,0 +1,76 @@
+name: BAL Protected Continuation / Current Geth
+
+on:
+  push:
+    branches:
+      - bal-protected-continuation-oct10-v1
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  qualification:
+    runs-on: ubuntu-latest
+    timeout-minutes: 75
+    env:
+      PINNED_UPSTREAM: 3a6c2e3b35ef8caa3d39dcbea3fe9f09099cca8c
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.27'
+          cache: false
+      - name: Reconcile candidate with exact merged upstream Geth
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p evidence
+          printf 'fork_source_head=%s\n' "$GITHUB_SHA" | tee evidence/source-pins.txt
+          printf 'upstream_base=%s\n' "$PINNED_UPSTREAM" | tee -a evidence/source-pins.txt
+          git config user.name "Metalogic CI"
+          git config user.email "ci@users.noreply.github.com"
+          git fetch --no-tags https://github.com/ethereum/go-ethereum.git "$PINNED_UPSTREAM"
+          git merge --no-edit --no-ff FETCH_HEAD
+          git merge-base --is-ancestor "$PINNED_UPSTREAM" HEAD
+          git diff --check
+          printf 'qualified_merge_head=%s\n' "$(git rev-parse HEAD)" | tee -a evidence/source-pins.txt
+          printf 'go_version=%s\n' "$(go version)" | tee -a evidence/source-pins.txt
+          printf 'qualification_boundary=core BlockChain real Pebble restart + unfinalized successor; not P2P/CL/shadowfork\n' | tee -a evidence/source-pins.txt
+          git diff --stat "$PINNED_UPSTREAM"...HEAD > evidence/candidate-stat.txt
+      - name: Format verified test and reusable benchmark
+        shell: bash
+        run: |
+          set -euo pipefail
+          gofmt -l core/bal_protected_continuation_test.go core/bal_finalized_import_bench_test.go | tee evidence/gofmt.txt
+          test ! -s evidence/gofmt.txt
+      - name: Protected-future and negative-control tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          go test ./core -run '^(TestBALProtectedFutureAcrossPebbleRestart|TestBALFinalityMultiwindowInsertChain|TestBALReconstruction.*|TestBALFinalityWindow.*|TestInsertChainReconstructsFinalizedState|TestInsertChainExecutesWhenReconstructionDisabled)$' -count=1 -v -timeout=35m 2>&1 | tee evidence/protected-future-tests.txt
+      - name: Full core regression suite
+        shell: bash
+        run: |
+          set -euo pipefail
+          go test ./core -count=1 -timeout=35m 2>&1 | tee evidence/full-core-tests.txt
+      - name: Concurrent proof-cache negative controls
+        shell: bash
+        run: |
+          set -euo pipefail
+          go test -race ./core -run '^TestBALFinalityWindowConcurrentForkQueries$' -count=1 -timeout=20m 2>&1 | tee evidence/race-tests.txt
+      - name: Current-head equal-fixture importer A/B
+        shell: bash
+        run: |
+          set -euo pipefail
+          go test ./core -run '^$' -bench '^BenchmarkFinalizedBALBlockImport$' -benchtime=3x -count=2 -benchmem -timeout=35m 2>&1 | tee evidence/bench.txt
+      - name: Seal scoped evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: bal-protected-future-oct10-${{ github.sha }}
+          path: evidence/
+          retention-days: 30
+          if-no-files-found: warn
