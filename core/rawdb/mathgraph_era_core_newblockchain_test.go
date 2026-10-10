@@ -8,7 +8,6 @@
 package rawdb_test
 
 import (
-    "os"
     "path/filepath"
     "testing"
 
