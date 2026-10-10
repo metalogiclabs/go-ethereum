@@ -109,7 +109,7 @@ func openBALNodeAB(t *testing.T, dir string, genesis *core.Genesis, reconstruct 
 		Name:    "bal-node-ab",
 		DataDir: dir,
 		IPCPath: "",
-		P2P:     p2p.Config{NoDiscovery: true, ListenAddr: "127.0.0.1:0", MaxPeers: 0},
+		P2P:     p2p.Config{NoDiscovery: true, ListenAddr: "127.0.0.1:0", MaxPeers: 10},
 	})
 	if err != nil {
 		t.Fatal(err)
