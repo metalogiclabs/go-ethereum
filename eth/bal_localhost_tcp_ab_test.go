@@ -19,21 +19,21 @@ import (
 )
 
 type balTCPObservation struct {
-	Round int `json:"round"`
-	Mode string `json:"mode"`
-	NegotiatedETH uint `json:"negotiated_eth"`
-	LocalSocketPeers int `json:"local_socket_peers"`
-	Head string `json:"head"`
-	StateRoot string `json:"state_root"`
-	Counter uint64 `json:"counter"`
-	Blocks int `json:"blocks"`
-	TxBlocks int `json:"tx_blocks"`
-	ExecutedTxBlocks int `json:"executed_tx_blocks"`
-	ExecutionlessTxBlocks int `json:"executionless_tx_blocks"`
-	ReopenedExecutedTxBlocks int `json:"reopened_executed_tx_blocks"`
-	ReopenedExecutionlessTxBlocks int `json:"reopened_executionless_tx_blocks"`
-	SyncWallNS int64 `json:"sync_wall_ns"`
-	RestartVerified bool `json:"restart_verified"`
+	Round                         int    `json:"round"`
+	Mode                          string `json:"mode"`
+	NegotiatedETH                 uint   `json:"negotiated_eth"`
+	LocalSocketPeers              int    `json:"local_socket_peers"`
+	Head                          string `json:"head"`
+	StateRoot                     string `json:"state_root"`
+	Counter                       uint64 `json:"counter"`
+	Blocks                        int    `json:"blocks"`
+	TxBlocks                      int    `json:"tx_blocks"`
+	ExecutedTxBlocks              int    `json:"executed_tx_blocks"`
+	ExecutionlessTxBlocks         int    `json:"executionless_tx_blocks"`
+	ReopenedExecutedTxBlocks      int    `json:"reopened_executed_tx_blocks"`
+	ReopenedExecutionlessTxBlocks int    `json:"reopened_executionless_tx_blocks"`
+	SyncWallNS                    int64  `json:"sync_wall_ns"`
+	RestartVerified               bool   `json:"restart_verified"`
 }
 
 func balTCPWait(t *testing.T, label string, limit time.Duration, ready func() bool) {
@@ -111,7 +111,7 @@ func balTCPOneArm(t *testing.T, round int, reconstruct bool, genesis *core.Genes
 	obs := balTCPObservation{
 		Round: round, Mode: mode, NegotiatedETH: negotiated,
 		LocalSocketPeers: targetStack.Server().PeerCount(),
-		Head: final.Hash().Hex(), StateRoot: final.Root().Hex(),
+		Head:             final.Hash().Hex(), StateRoot: final.Root().Hex(),
 		Counter: uint64(txCount), Blocks: len(blocks), TxBlocks: txCount,
 		ExecutedTxBlocks: executed, ExecutionlessTxBlocks: skipped,
 		SyncWallNS: syncElapsed.Nanoseconds(),
