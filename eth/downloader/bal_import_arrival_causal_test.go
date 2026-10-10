@@ -265,7 +265,9 @@ func TestBALImportTimeAvailabilityCausalSeparator(t *testing.T) {
 	}
 
 	sourceState, err := serving.State()
-	if err != nil { t.Fatal(err) }
+	if err != nil {
+		t.Fatal(err)
+	}
 	expectedBalance := sourceState.GetBalance(common.Address{0x01}).Uint64()
 	t.Logf("MG_BAL_CAUSAL_SOURCE expected_recipient_balance=%d", expectedBalance)
 	var outcomes []balImportCausalResult
