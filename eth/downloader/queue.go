@@ -218,13 +218,13 @@ type queue struct {
 	// Fork-only research policy, deliberately zero by default and capped below.
 	// A grace interval is applied once per completed downloader batch, before
 	// that batch is irrevocably removed from the result cache.
-	balGraceWindow    time.Duration
-	balGraceSpent     time.Duration // Charges one global capped per-sync budget
-	balGraceRequireInFlight bool // No wait when no actual BAL request exists
-	balGraceSignal    chan struct{}
-	balGraceStartHook func(int)
-	balGraceEndHook   func(time.Duration, bool)
-	balBatchReadyHook func() // Fork-only: mandatory parts complete in both policy arms
+	balGraceWindow          time.Duration
+	balGraceSpent           time.Duration // Charges one global capped per-sync budget
+	balGraceRequireInFlight bool          // No wait when no actual BAL request exists
+	balGraceSignal          chan struct{}
+	balGraceStartHook       func(int)
+	balGraceEndHook         func(time.Duration, bool)
+	balBatchReadyHook       func() // Fork-only: mandatory parts complete in both policy arms
 }
 
 // newQueue creates a new download queue for scheduling block retrieval.
