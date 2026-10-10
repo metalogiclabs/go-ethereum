@@ -324,7 +324,7 @@ func TestBALBoundedGraceProtectedPolicy(t *testing.T) {
 		t.Fatalf("already-available authenticated BALs did not take correct path: %+v", early)
 	}
 	t.Logf("MG_BAL_GRACE_VERDICT %s",
-		fmt.Sprintf("immediate=%d/%d grace=%d/%d late=%d/%d legacy=%d/%d early=%d/%d; global-wait-budget<=25ms legacy-waits=%d", 
+		fmt.Sprintf("immediate=%d/%d grace=%d/%d late=%d/%d legacy=%d/%d early=%d/%d; global-wait-budget<=25ms legacy-waits=%d",
 			immediate.Reconstructed, len(blocks), grace.Reconstructed, len(blocks),
 			late.Reconstructed, len(blocks), legacy.Reconstructed, len(blocks), early.Reconstructed, len(blocks), legacy.WaitCalls))
 }
