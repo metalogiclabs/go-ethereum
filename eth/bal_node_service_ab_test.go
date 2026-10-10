@@ -61,9 +61,14 @@ func makeBALNodeABCorpus(t *testing.T) (*core.Genesis, []*types.Block, common.Ad
 		Difficulty: common.Big0,
 		BaseFee:    big.NewInt(params.InitialBaseFee),
 		Alloc: types.GenesisAlloc{
-			from:                      {Balance: new(big.Int).Mul(big.NewInt(100000), big.NewInt(params.Ether))},
-			contract:                  {Balance: common.Big0, Code: common.FromHex("0x60005460010160005500")},
-			params.BeaconRootsAddress: {Code: params.BeaconRootsCode},
+			from:                             {Balance: new(big.Int).Mul(big.NewInt(100000), big.NewInt(params.Ether))},
+			contract:                         {Balance: common.Big0, Code: common.FromHex("0x60005460010160005500")},
+			params.BeaconRootsAddress:        {Code: params.BeaconRootsCode},
+			params.HistoryStorageAddress:     {Code: params.HistoryStorageCode},
+			params.WithdrawalQueueAddress:    {Code: params.WithdrawalQueueCode},
+			params.ConsolidationQueueAddress: {Code: params.ConsolidationQueueCode},
+			params.BuilderDepositAddress:     {Code: params.BuilderDepositCode},
+			params.BuilderExitAddress:        {Code: params.BuilderExitCode},
 		},
 	}
 	engine := beacon.New(ethash.NewFaker())
