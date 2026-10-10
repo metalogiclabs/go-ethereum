@@ -159,6 +159,7 @@ type Downloader struct {
 	receiptFetchHook func([]*types.Header) // Method to call upon starting a receipt fetch
 	balFetchHook     func([]*types.Header) // Method to call upon starting a block access list fetch
 	chainInsertHook  func([]*fetchResult)  // Method to call upon inserting a chain of blocks (possibly in multiple invocations)
+	balImportHook    func(uint64, bool)   // Fork-only research probe at exact block BAL pointer load
 
 	// Progress reporting metrics
 	syncStartBlock uint64    // Head snap block when Geth was started
@@ -930,7 +931,11 @@ func (d *Downloader) importBlockResults(results []*fetchResult) error {
 		// Attach the access list if it was retrieved from the network. The
 		// content hash was already verified against the header on delivery;
 		// blocks lacking one have theirs computed locally during execution.
-		if list := result.BAL(); list != nil {
+		list := result.BAL()
+		if d.balImportHook != nil {
+			d.balImportHook(result.Header.Number.Uint64(), list != nil)
+		}
+		if list != nil {
 			blocks[i] = blocks[i].WithAccessListUnsafe(list)
 		}
 	}
