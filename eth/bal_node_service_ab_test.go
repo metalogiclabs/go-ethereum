@@ -267,7 +267,6 @@ func TestBALNodeServicePairedImportAndRestart(t *testing.T) {
 	}
 }
 
-
 // TestBALNodeServiceFinalizedContinuation composes the earlier node-service
 // restart warrant with a new protected future: a transaction-bearing block
 // strictly above finality must be EXECUTED after reopening a service whose
