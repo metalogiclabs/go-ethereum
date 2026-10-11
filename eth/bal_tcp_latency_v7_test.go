@@ -70,9 +70,9 @@ func TestBALRealTCPLatencyGraceGate(t *testing.T) {
 			obs := balTCPOneArm(t, trial, mode.reconstruct, genesis, blocks, contract, txCount)
 			row := balTCPv7Evidence{
 				NetemDelayMS: delayMS, Trial: trial, Mode: mode.name,
-				GraceWindowMS: mode.window.Milliseconds(),
+				GraceWindowMS:  mode.window.Milliseconds(),
 				ChargedGraceMS: float64(charged) / float64(time.Millisecond),
-				Observation: obs,
+				Observation:    obs,
 			}
 			if !obs.RestartVerified || obs.Blocks != 260 || obs.TxBlocks != 65 ||
 				obs.Counter != 65 || obs.NegotiatedETH < 71 || obs.LocalSocketPeers != 1 {
