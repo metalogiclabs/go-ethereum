@@ -18,6 +18,12 @@ import (
 	"github.com/ethereum/go-ethereum/eth/protocols/eth"
 )
 
+// Test-only injection points: defaults are inert in the original TCP qualification.
+// They let a separately tagged experiment configure an opt-in downloader and
+// inspect its counters after the target node has stopped.
+var balTCPExperimentConfigure = func(*Ethereum) {}
+var balTCPExperimentAfterStop = func(*Ethereum, *balTCPObservation) {}
+
 type balTCPObservation struct {
 	Round                         int    `json:"round"`
 	Mode                          string `json:"mode"`
@@ -70,6 +76,7 @@ func balTCPOneArm(t *testing.T, round int, reconstruct bool, genesis *core.Genes
 
 	targetDir := filepath.Join(base, "target")
 	targetStack, target := openBALNodeAB(t, targetDir, genesis, reconstruct)
+	balTCPExperimentConfigure(target)
 	final := blocks[len(blocks)-1]
 	target.BlockChain().SetFinalized(final.Header())
 	balTCPWait(t, "source range at final head", 8*time.Second, func() bool {
@@ -125,6 +132,7 @@ func balTCPOneArm(t *testing.T, round int, reconstruct bool, genesis *core.Genes
 	if err := targetStack.Close(); err != nil {
 		t.Fatal(err)
 	}
+	balTCPExperimentAfterStop(target, &obs)
 	if err := sourceStack.Close(); err != nil {
 		t.Fatal(err)
 	}
