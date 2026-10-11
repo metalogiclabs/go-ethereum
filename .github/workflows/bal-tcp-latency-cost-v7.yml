@@ -4,6 +4,9 @@ on:
   push:
     branches:
       - bal-tcp-latency-cost-v7
+  pull_request:
+    branches:
+      - bal-grace-policy-capability-v6
   workflow_dispatch:
 
 permissions:
