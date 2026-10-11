@@ -232,9 +232,20 @@ func TestBALTwoPeerTCPLatencyFallbackV8(t *testing.T) {
 	genesis, blocks, contract, txCount := makeBALNodeABCorpus(t)
 	modes := []string{"execute", "reconstruct-immediate", "reconstruct-grace"}
 	orders := [][]int{{0, 1, 2}, {2, 0, 1}, {1, 2, 0}}
+	// V10 only: increase independent trial count without changing the
+	// existing V8/V9 three-order default or any downloader decision.
+	trialCount := 3
+	if raw := os.Getenv("MG_BAL_V10_TRIALS"); raw != "" {
+		n, err := strconv.Atoi(raw)
+		if err != nil || n < 3 || n > 20 {
+			t.Fatalf("invalid MG_BAL_V10_TRIALS=%q", raw)
+		}
+		trialCount = n
+	}
 	scenarios := []string{"two-healthy", "one-missing-bal"}
 	for _, scenario := range scenarios {
-		for trial, order := range orders {
+		for trial := 0; trial < trialCount; trial++ {
+			order := orders[trial%len(orders)]
 			var arms [3]balTwoPeerObservation
 			for _, index := range order {
 				obs := runBALTwoPeerArm(t, trial, delay, scenario, modes[index], genesis, blocks, contract, txCount)
