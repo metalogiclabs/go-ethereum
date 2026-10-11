@@ -24,3 +24,10 @@ func (d *Downloader) ConfigureBALGraceForExperiment(window time.Duration) {
 func (d *Downloader) BALGraceConsumedForExperiment() time.Duration {
 	return d.queue.balGraceSpent
 }
+
+// ObserveBALPeerOutcomesForExperiment records only already-decided outcomes
+// at the downloader's existing authenticated BAL response boundary.
+// Each callback occurs under the queue lock; callbacks must not reenter it.
+func (d *Downloader) ObserveBALPeerOutcomesForExperiment(observe func(string, uint64, string, time.Duration)) {
+	d.queue.balPeerOutcomeHook = observe
+}
