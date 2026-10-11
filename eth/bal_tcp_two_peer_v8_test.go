@@ -15,6 +15,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"sync"
 	"testing"
 	"time"
 
@@ -43,6 +44,10 @@ type balTwoPeerObservation struct {
 	WallNS         int64   `json:"sync_wall_ns"`
 	GraceChargedMS float64 `json:"grace_charged_ms"`
 	RestartOK      bool    `json:"restart_verified"`
+
+	// V9: per-source counts from the downloader's validation boundary.
+	Peer0Outcomes map[string]int `json:"peer0_outcomes"`
+	Peer1Outcomes map[string]int `json:"peer1_outcomes"`
 }
 
 func runBALTwoPeerArm(t *testing.T, trial int, delay int, scenario string, mode string, genesis *core.Genesis, blocks []*types.Block, contract common.Address, txCount int) balTwoPeerObservation {
@@ -91,6 +96,16 @@ func runBALTwoPeerArm(t *testing.T, trial int, delay int, scenario string, mode 
 	}
 	targetDir := filepath.Join(base, "target")
 	targetStack, target := openBALNodeAB(t, targetDir, genesis, reconstruct)
+	var peerEvidenceMu sync.Mutex
+	peerEvidence := make(map[string]map[string]int)
+	target.handler.downloader.ObserveBALPeerOutcomesForExperiment(func(peer string, _ uint64, outcome string, _ time.Duration) {
+		peerEvidenceMu.Lock()
+		if peerEvidence[peer] == nil {
+			peerEvidence[peer] = make(map[string]int)
+		}
+		peerEvidence[peer][outcome]++
+		peerEvidenceMu.Unlock()
+	})
 	defer func() {
 		if targetStack != nil {
 			_ = targetStack.Close()
@@ -155,6 +170,27 @@ func runBALTwoPeerArm(t *testing.T, trial int, delay int, scenario string, mode 
 	}
 	targetStack = nil
 	obs.GraceChargedMS = float64(target.handler.downloader.BALGraceConsumedForExperiment()) / float64(time.Millisecond)
+	// Source identities are authenticated P2P node IDs, exactly the IDs
+	// registered in the downloader. Count only outcomes actually returned
+	// across that queue boundary: being connected does not imply being used.
+	ids := [2]string{stacks[0].Server().Self().ID().String(), stacks[1].Server().Self().ID().String()}
+	peerEvidenceMu.Lock()
+	for key := range peerEvidence {
+		if key != ids[0] && key != ids[1] {
+			peerEvidenceMu.Unlock()
+			t.Fatalf("unattributed peer response %q", key)
+		}
+	}
+	cloneCounts := func(key string) map[string]int {
+		out := make(map[string]int)
+		for status, n := range peerEvidence[key] {
+			out[status] = n
+		}
+		return out
+	}
+	obs.Peer0Outcomes = cloneCounts(ids[0])
+	obs.Peer1Outcomes = cloneCounts(ids[1])
+	peerEvidenceMu.Unlock()
 	for i := range stacks {
 		if err := stacks[i].Close(); err != nil {
 			t.Fatal(err)
