@@ -214,6 +214,9 @@ type queue struct {
 
 	// Fork-only research hook: emitted after BAL hash/decode validation and successful result attachment.
 	balAttachHook func(uint64)
+	// Fork-only provenance observer, invoked after the existing validation decision.
+	// It is never configured by normal Geth and must not alter downloader state.
+	balPeerOutcomeHook func(peerID string, number uint64, outcome string, elapsed time.Duration)
 
 	// Fork-only research policy, deliberately zero by default and capped below.
 	// A grace interval is applied once per completed downloader batch, before
@@ -1129,6 +1132,13 @@ func (q *queue) DeliverBALs(id string, bals []rlp.RawValue, hashes []common.Hash
 		// Should the response be invalid at some point, return all the
 		// remaining tasks to the queue for retrieval from other peers
 		if failure != nil || i >= len(bals) {
+			if q.balPeerOutcomeHook != nil {
+				outcome := "short"
+				if failure != nil {
+					outcome = "following-invalid"
+				}
+				q.balPeerOutcomeHook(request.Peer.id, header.Number.Uint64(), outcome, time.Since(request.Time))
+			}
 			retry(header)
 			continue
 		}
@@ -1138,6 +1148,9 @@ func (q *queue) DeliverBALs(id string, bals []rlp.RawValue, hashes []common.Hash
 		// list (an empty list is itself a valid access list); leave the task
 		// queued for other peers to have a go at it.
 		if bytes.Equal(bals[i], rlp.EmptyString) {
+			if q.balPeerOutcomeHook != nil {
+				q.balPeerOutcomeHook(request.Peer.id, header.Number.Uint64(), "unavailable", time.Since(request.Time))
+			}
 			request.Peer.MarkLackingBAL(hash)
 			retry(header)
 			continue
@@ -1145,12 +1158,18 @@ func (q *queue) DeliverBALs(id string, bals []rlp.RawValue, hashes []common.Hash
 		// Validate the content against the hash committed in the header and
 		// decode it. Anything invalid is a protocol violation.
 		if header.BlockAccessListHash == nil || hashes[i] != *header.BlockAccessListHash {
+			if q.balPeerOutcomeHook != nil {
+				q.balPeerOutcomeHook(request.Peer.id, header.Number.Uint64(), "invalid-hash", time.Since(request.Time))
+			}
 			failure = errInvalidBAL
 			retry(header)
 			continue
 		}
 		list := new(bal.BlockAccessList)
 		if err := rlp.DecodeBytes(bals[i], list); err != nil {
+			if q.balPeerOutcomeHook != nil {
+				q.balPeerOutcomeHook(request.Peer.id, header.Number.Uint64(), "invalid-decode", time.Since(request.Time))
+			}
 			failure = fmt.Errorf("%w: %v", errInvalidBAL, err)
 			retry(header)
 			continue
@@ -1164,6 +1183,9 @@ func (q *queue) DeliverBALs(id string, bals []rlp.RawValue, hashes []common.Hash
 			res.SetBAL(list)
 			res.SetBALDone()
 			accepted++
+			if q.balPeerOutcomeHook != nil {
+				q.balPeerOutcomeHook(request.Peer.id, header.Number.Uint64(), "attached", time.Since(request.Time))
+			}
 			if q.balAttachHook != nil {
 				q.balAttachHook(header.Number.Uint64())
 			}
@@ -1171,6 +1193,8 @@ func (q *queue) DeliverBALs(id string, bals []rlp.RawValue, hashes []common.Hash
 			case q.balGraceSignal <- struct{}{}:
 			default:
 			}
+		} else if q.balPeerOutcomeHook != nil {
+			q.balPeerOutcomeHook(request.Peer.id, header.Number.Uint64(), "late", time.Since(request.Time))
 		}
 		delete(q.balTaskPool, hash)
 	}
