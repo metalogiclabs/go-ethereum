@@ -18,12 +18,12 @@ import (
 )
 
 type balTCPv7Evidence struct {
-	NetemDelayMS     int               `json:"netem_delay_ms"`
-	Trial            int               `json:"trial"`
-	Mode             string            `json:"mode"`
-	GraceWindowMS    int64             `json:"grace_window_ms"`
-	ChargedGraceMS   float64           `json:"charged_grace_ms"`
-	Observation      balTCPObservation `json:"observation"`
+	NetemDelayMS   int               `json:"netem_delay_ms"`
+	Trial          int               `json:"trial"`
+	Mode           string            `json:"mode"`
+	GraceWindowMS  int64             `json:"grace_window_ms"`
+	ChargedGraceMS float64           `json:"charged_grace_ms"`
+	Observation    balTCPObservation `json:"observation"`
 }
 
 // Run the same pre-generated chain through genuine local Geth-to-Geth TCP.
