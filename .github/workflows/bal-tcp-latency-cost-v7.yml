@@ -1,0 +1,143 @@
+name: Ethereum BAL TCP Latency Cost V7 (Fork-Only)
+
+on:
+  push:
+    branches:
+      - bal-tcp-latency-cost-v7
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  real-tcp-latency:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Pin official Geth with merged snap2 pivot fix
+        run: |
+          git config user.name "Metalogic Research CI"
+          git config user.email "ci@mathgraph.org"
+          git fetch --no-tags https://github.com/ethereum/go-ethereum.git 3a6c2e3b35ef8caa3d39dcbea3fe9f09099cca8c
+          git merge --no-edit FETCH_HEAD
+          git merge-base --is-ancestor 3a6c2e3b35ef8caa3d39dcbea3fe9f09099cca8c HEAD
+          echo "MG_BAL_V7_SOURCE_HEAD=$(git rev-parse HEAD)"
+          echo "MG_BAL_V7_SOURCE_TREE=$(git rev-parse HEAD^{tree})"
+          echo "MG_BAL_V7_RESEARCH_HEAD=$(git rev-parse HEAD^1)"
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.27'
+          cache: false
+      - name: Format and protected predecessor controls
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/eth-bal-v7"
+          gofmt -l eth/downloader/bal_grace_experiment_v7.go eth/bal_tcp_latency_v7_test.go eth/bal_localhost_tcp_ab_test.go > "$RUNNER_TEMP/eth-bal-v7/format.txt"
+          test ! -s "$RUNNER_TEMP/eth-bal-v7/format.txt"
+          sha256sum eth/downloader/bal_grace_experiment_v7.go eth/bal_tcp_latency_v7_test.go eth/bal_localhost_tcp_ab_test.go | tee "$RUNNER_TEMP/eth-bal-v7/source.sha256"
+          go test ./core -run '^(TestBALFinalityMultiwindowInsertChain|TestBALReconstructionFinalityForkImport|TestBALReconstructionRejectsBrokenSkeletonChain)$' -count=1
+          go test ./eth/downloader -run '^TestBALBoundedGrace' -count=1 -timeout=20m
+          go test ./eth -run '^(TestBALDownloaderLegacyPeerForcesFallback|TestBALRealLoopbackTCPDownloaderPaired)$' -count=1 -timeout=20m
+      - name: Compile dedicated exact Geth test executable
+        shell: bash
+        run: |
+          set -euo pipefail
+          go test -c -tags balexperiment -o "$RUNNER_TEMP/eth-bal-v7/tcp-v7.test" ./eth
+          sha256sum "$RUNNER_TEMP/eth-bal-v7/tcp-v7.test" | tee "$RUNNER_TEMP/eth-bal-v7/binary.sha256"
+          command -v tc || { sudo apt-get update && sudo apt-get install -y iproute2; }
+          test -x /usr/bin/time || { sudo apt-get update && sudo apt-get install -y time; }
+      - name: Real encrypted TCP paired trial under explicitly checked loopback netem
+        shell: bash
+        run: |
+          set -euo pipefail
+          cleanup() { sudo tc qdisc del dev lo root 2>/dev/null || true; }
+          trap cleanup EXIT
+          for delay in 0 3 15; do
+            cleanup
+            if test "$delay" -gt 0; then
+              sudo tc qdisc replace dev lo root netem delay "$delay"ms
+              tc qdisc show dev lo | grep -q 'netem'
+            else
+              if tc qdisc show dev lo | grep -q 'netem'; then
+                echo "ERROR: expected unshaped loopback baseline"
+                exit 1
+              fi
+            fi
+            tc qdisc show dev lo | tee "$RUNNER_TEMP/eth-bal-v7/qdisc-before-$delay.txt"
+            export MG_BAL_TCP_NETEM_MS="$delay"
+            /usr/bin/time -f 'MG_BAL_TCP_V7_PROCESS wall_s=%e user_s=%U sys_s=%S maxrss_kib=%M' \
+              -o "$RUNNER_TEMP/eth-bal-v7/cost-$delay.txt" \
+              "$RUNNER_TEMP/eth-bal-v7/tcp-v7.test" \
+              -test.run '^TestBALRealTCPLatencyGraceGate$' -test.v -test.count=1 -test.timeout=30m \
+              2>&1 | tee "$RUNNER_TEMP/eth-bal-v7/tcp-$delay.log"
+            grep -q '^PASS$' "$RUNNER_TEMP/eth-bal-v7/tcp-$delay.log"
+            test "$(grep -c 'MG_BAL_TCP_V7_ARM' "$RUNNER_TEMP/eth-bal-v7/tcp-$delay.log")" -eq 9
+            tc -s qdisc show dev lo | tee "$RUNNER_TEMP/eth-bal-v7/qdisc-after-$delay.txt"
+            if test "$delay" -gt 0; then
+              grep -Eq 'Sent [1-9][0-9]* bytes [1-9][0-9]* pkt' "$RUNNER_TEMP/eth-bal-v7/qdisc-after-$delay.txt"
+            fi
+          done
+      - name: Independent receipt/state and latency decision summary
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - "$RUNNER_TEMP/eth-bal-v7" <<'PY'
+          import json, pathlib, re, statistics, sys
+          root = pathlib.Path(sys.argv[1])
+          summary = {"source_boundary": "in-process Geth nodes connected over genuine encrypted localhost TCP", "latencies": {}}
+          for delay in (0, 3, 15):
+              content = (root / f"tcp-{delay}.log").read_text()
+              records = [json.loads(m.group(1)) for m in re.finditer(r"MG_BAL_TCP_V7_ARM (\{[^\n]+\})", content)]
+              assert len(records) == 9, (delay, len(records))
+              indexed = {(a["trial"], a["mode"]): a for a in records}
+              assert len(indexed) == 9
+              for trial in range(3):
+                  ex = indexed[(trial, "execute")]
+                  fast = indexed[(trial, "reconstruct-immediate")]
+                  grace = indexed[(trial, "reconstruct-grace")]
+                  assert ex["observation"]["head"] == fast["observation"]["head"] == grace["observation"]["head"]
+                  assert ex["observation"]["state_root"] == fast["observation"]["state_root"] == grace["observation"]["state_root"]
+                  assert ex["observation"]["counter"] == fast["observation"]["counter"] == grace["observation"]["counter"] == 65
+                  for a in (ex, fast, grace):
+                      o = a["observation"]
+                      assert o["restart_verified"] and o["local_socket_peers"] == 1 and o["negotiated_eth"] >= 71
+                      assert o["executed_tx_blocks"] + o["executionless_tx_blocks"] == 65
+                      assert o["reopened_executed_tx_blocks"] == o["executed_tx_blocks"]
+                      assert o["reopened_executionless_tx_blocks"] == o["executionless_tx_blocks"]
+                  assert ex["observation"]["executionless_tx_blocks"] == 0
+                  assert 0 <= grace["charged_grace_ms"] <= 25.00001
+                  assert fast["charged_grace_ms"] == 0 and ex["charged_grace_ms"] == 0
+              results = {}
+              for mode in ("execute", "reconstruct-immediate", "reconstruct-grace"):
+                  rows = [indexed[(trial, mode)] for trial in range(3)]
+                  results[mode] = {
+                      "skips": [r["observation"]["executionless_tx_blocks"] for r in rows],
+                      "sync_wall_ms": [round(r["observation"]["sync_wall_ns"]/1e6, 3) for r in rows],
+                      "median_sync_wall_ms": round(statistics.median(r["observation"]["sync_wall_ns"] for r in rows)/1e6, 3),
+                      "grace_charged_ms": [round(r["charged_grace_ms"], 4) for r in rows],
+                  }
+              immediate, grace = results["reconstruct-immediate"], results["reconstruct-grace"]
+              # Predeclared, deliberately conservative candidate threshold:
+              # >=5 additional executionless tx blocks in EACH of three orders,
+              # and >=10% median sync-wall reduction at this same latency.
+              consistent_skips = all(b-a >= 5 for a, b in zip(immediate["skips"], grace["skips"]))
+              wall_gain = grace["median_sync_wall_ms"] <= 0.90 * immediate["median_sync_wall_ms"]
+              results["admission_candidate"] = bool(consistent_skips and wall_gain)
+              summary["latencies"][str(delay)] = results
+          summary["decision"] = "NETWORK_PERFORMANCE_CANDIDATE_REQUIRES_EXTERNAL_REPLICATION" if any(
+              v["admission_candidate"] for v in summary["latencies"].values()) else "NO_MATERIAL_NETWORK_GAIN_ESTABLISHED"
+          summary["official_upstream_acceptance"] = "UNKNOWN"
+          summary["full_devnet_throughput"] = "UNKNOWN"
+          (root/"summary.json").write_text(json.dumps(summary, indent=2, sort_keys=True)+"\n")
+          print("MG_BAL_TCP_V7_SUMMARY", json.dumps(summary, sort_keys=True))
+          PY
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: ethereum-bal-tcp-latency-v7-evidence
+          path: ${{ runner.temp }}/eth-bal-v7/
+          if-no-files-found: ignore
