@@ -1,0 +1,160 @@
+name: Ethereum BAL Per-Peer Response Provenance V9 (Fork Only)
+
+on:
+  push:
+    branches:
+      - bal-peer-provenance-v9
+  pull_request:
+    branches:
+      - bal-two-peer-latency-v8
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  multi-peer-separator:
+    runs-on: ubuntu-latest
+    timeout-minutes: 70
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Integrate pinned upstream Geth and preserve source identity
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "Metalogic Research CI"
+          git config user.email "ci@mathgraph.org"
+          git fetch --no-tags https://github.com/ethereum/go-ethereum.git 3a6c2e3b35ef8caa3d39dcbea3fe9f09099cca8c
+          git merge --no-edit FETCH_HEAD
+          git merge-base --is-ancestor 3a6c2e3b35ef8caa3d39dcbea3fe9f09099cca8c HEAD
+          echo "MG_BAL_V9_MERGED_HEAD=$(git rev-parse HEAD)"
+          echo "MG_BAL_V9_MERGED_TREE=$(git rev-parse HEAD^{tree})"
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.27'
+          cache: false
+      - name: Source integrity and protected negative controls
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/bal-v9"
+          gofmt -l eth/bal_tcp_two_peer_v8_test.go eth/downloader/queue.go eth/downloader/bal_grace_experiment_v7.go > "$RUNNER_TEMP/bal-v9/gofmt.txt"
+          test ! -s "$RUNNER_TEMP/bal-v9/gofmt.txt"
+          sha256sum eth/bal_tcp_two_peer_v8_test.go eth/downloader/bal_grace_experiment_v7.go eth/downloader/queue.go eth/bal_tcp_latency_v7_test.go > "$RUNNER_TEMP/bal-v9/source.sha256"
+          go test ./core -run '^(TestBALFinalityMultiwindowInsertChain|TestBALReconstructionFinalityForkImport|TestBALReconstructionRejectsBrokenSkeletonChain)$' -count=1 -timeout=15m
+          go test ./eth/downloader -run '^TestBALBoundedGrace' -count=1 -timeout=15m
+          go test ./eth -run '^(TestBALDownloaderLegacyPeerForcesFallback|TestBALRealLoopbackTCPDownloaderPaired)$' -count=1 -timeout=15m
+      - name: Compile and pin dedicated BAL V8 executable
+        shell: bash
+        run: |
+          set -euo pipefail
+          go test -c -tags balexperiment -o "$RUNNER_TEMP/bal-v9/bal-v9.test" ./eth
+          sha256sum "$RUNNER_TEMP/bal-v9/bal-v9.test" > "$RUNNER_TEMP/bal-v9/binary.sha256"
+          command -v tc || { sudo apt-get update && sudo apt-get install -y iproute2; }
+          test -x /usr/bin/time || { sudo apt-get update && sudo apt-get install -y time; }
+      - name: Encrypted dual-peer Geth under shaped TCP
+        shell: bash
+        run: |
+          set -euo pipefail
+          cleanup() { sudo tc qdisc del dev lo root 2>/dev/null || true; }
+          trap cleanup EXIT
+          for delay in 3 15; do
+            cleanup
+            sudo tc qdisc replace dev lo root netem delay "$delay"ms
+            tc qdisc show dev lo | grep -q 'netem'
+            tc qdisc show dev lo > "$RUNNER_TEMP/bal-v9/qdisc-before-$delay.txt"
+            export MG_BAL_TCP_NETEM_MS="$delay"
+            /usr/bin/time -f 'MG_BAL_V9_PROCESS wall_s=%e user_s=%U sys_s=%S maxrss_kib=%M' \
+              -o "$RUNNER_TEMP/bal-v9/cost-$delay.txt" \
+              "$RUNNER_TEMP/bal-v9/bal-v9.test" \
+              -test.run '^TestBALTwoPeerTCPLatencyFallbackV8$' -test.v -test.count=1 -test.timeout=40m \
+              2>&1 | tee "$RUNNER_TEMP/bal-v9/tcp-$delay.log"
+            grep -q '^PASS$' "$RUNNER_TEMP/bal-v9/tcp-$delay.log"
+            test "$(grep -c 'MG_BAL_TCP_V8_ARM' "$RUNNER_TEMP/bal-v9/tcp-$delay.log")" -eq 18
+            tc -s qdisc show dev lo > "$RUNNER_TEMP/bal-v9/qdisc-after-$delay.txt"
+            grep -Eq 'Sent [1-9][0-9]* bytes [1-9][0-9]* pkt' "$RUNNER_TEMP/bal-v9/qdisc-after-$delay.txt"
+          done
+      - name: Seal independent verdict from exact observable records
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - "$RUNNER_TEMP/bal-v9" <<'PY'
+          import json, pathlib, re, statistics, sys
+          root = pathlib.Path(sys.argv[1])
+          output = {"comparison": "two authenticated TCP peers, one optionally lacking BAL records", "latencies": {}}
+          for delay in (3, 15):
+              data = (root / f"tcp-{delay}.log").read_text()
+              rows = [json.loads(z) for z in re.findall(r"MG_BAL_TCP_V8_ARM (\{[^\n]+\})", data)]
+              assert len(rows) == 18, (delay, len(rows))
+              found = {(r["scenario"], r["trial"], r["mode"]): r for r in rows}
+              assert len(found) == 18
+              scenarios = {}
+              for scenario in ("two-healthy", "one-missing-bal"):
+                  for trial in range(3):
+                      ex, immediate, grace = (found[(scenario, trial, m)] for m in
+                          ("execute", "reconstruct-immediate", "reconstruct-grace"))
+                      for x in (ex, immediate, grace):
+                          assert x["peer_count"] == 2 and x["minimum_eth"] >= 71
+                          assert x["missing_bal_peer"] == (scenario == "one-missing-bal")
+                          assert x["head"] == ex["head"] and x["state_root"] == ex["state_root"] and x["counter"] == 65
+                          assert x["executed_tx_blocks"] + x["executionless_tx_blocks"] == 65
+                          assert x["reopened_executed_tx_blocks"] == x["executed_tx_blocks"]
+                          assert x["reopened_executionless_tx_blocks"] == x["executionless_tx_blocks"]
+                          assert x["restart_verified"] is True
+                          assert 0 <= x["grace_charged_ms"] <= 25.00001
+                      assert ex["executionless_tx_blocks"] == 0
+                      assert ex["grace_charged_ms"] == immediate["grace_charged_ms"] == 0
+                  stats = {}
+                  for mode in ("execute", "reconstruct-immediate", "reconstruct-grace"):
+                      selected = [found[(scenario, i, mode)] for i in range(3)]
+                      stats[mode] = {
+                          "skips": [x["executionless_tx_blocks"] for x in selected],
+                          "sync_wall_ms": [round(x["sync_wall_ns"]/1e6, 3) for x in selected],
+                          "median_sync_wall_ms": round(statistics.median(x["sync_wall_ns"] for x in selected)/1e6, 3),
+                          "charged_ms": [round(x["grace_charged_ms"], 3) for x in selected],
+                      }
+                  # Source0 always has the BAL; source1 may have none.
+                  # Classify only actual authenticated queue response outcomes.
+                  for mode in ("execute", "reconstruct-immediate", "reconstruct-grace"):
+                      selected = [found[(scenario, i, mode)] for i in range(3)]
+                      for side in ("peer0", "peer1"):
+                          bucket = {}
+                          for item in selected:
+                              for status, count in item[f"{side}_outcomes"].items():
+                                  assert count >= 0
+                                  bucket[status] = bucket.get(status, 0) + count
+                          stats[mode][f"{side}_outcomes"] = bucket
+                  a, b = stats["reconstruct-immediate"], stats["reconstruct-grace"]
+                  sufficient_skips = all(y-x >= 5 for x, y in zip(a["skips"], b["skips"]))
+                  material_wall = b["median_sync_wall_ms"] <= .9*a["median_sync_wall_ms"]
+                  stats["v7_transfer_candidate"] = bool(sufficient_skips and material_wall)
+                  scenarios[scenario] = stats
+              output["latencies"][str(delay)] = scenarios
+          output["decision"] = ("TWO_PEER_V7_TRANSFER_CANDIDATE_REQUIRES_EXTERNAL_REPLICATION"
+              if all(x["v7_transfer_candidate"] for x in output["latencies"]["3"].values())
+              else "NO_CONSISTENT_TWO_PEER_V7_TRANSFER_ESTABLISHED")
+          unavailable_from_missing_source = sum(
+              scenario["reconstruct-immediate"]["peer1_outcomes"].get("unavailable", 0) +
+              scenario["reconstruct-grace"]["peer1_outcomes"].get("unavailable", 0) +
+              scenario["reconstruct-immediate"]["peer1_outcomes"].get("short", 0) +
+              scenario["reconstruct-grace"]["peer1_outcomes"].get("short", 0)
+              for conditions in output["latencies"].values()
+              for scenario in [conditions["one-missing-bal"]]
+          )
+          output["missing_source_unavailable_response_count"] = unavailable_from_missing_source
+          output["per_peer_response_provenance"] = ("MISSING_SOURCE_WAS_ACTUALLY_SELECTED"
+              if unavailable_from_missing_source > 0 else "MISSING_SOURCE_SELECTION_NOT_WITNESSED")
+          output["per_peer_request_dispatch_without_response"] = "NOT_INSTRUMENTED"
+          output["cl_engine_api_finality"] = "NOT_TESTED"
+          output["production_or_mainnet_gain"] = "UNKNOWN"
+          (root/"summary.json").write_text(json.dumps(output, indent=2, sort_keys=True)+"\n")
+          print("MG_BAL_V9_SUMMARY", json.dumps(output, sort_keys=True))
+          PY
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: ethereum-bal-peer-provenance-v9-evidence
+          path: ${{ runner.temp }}/bal-v9/
+          if-no-files-found: ignore
