@@ -28,6 +28,34 @@ type balV13PendingEngineAPI struct {
 	onAdmit func()
 }
 
+// balV18ProveFinalizedAncestor requires an exact hash-linked path from the
+// announced head to the claimed finalized header. It fails closed on missing
+// headers, height inversion, loops and excessive traversal. This is a bounded
+// fork-only verifier, not a production Engine validation replacement.
+func balV18ProveFinalizedAncestor(headHash, finalHash common.Hash, get func(common.Hash) *types.Header) bool {
+	if headHash == (common.Hash{}) || finalHash == (common.Hash{}) {
+		return false
+	}
+	head, final := get(headHash), get(finalHash)
+	if head == nil || final == nil || head.Hash() != headHash || final.Hash() != finalHash ||
+		head.Number.Uint64() < final.Number.Uint64() {
+		return false
+	}
+	if head.Number.Uint64()-final.Number.Uint64() > 512 {
+		return false
+	}
+	current := head
+	for current.Number.Uint64() > final.Number.Uint64() {
+		parent := get(current.ParentHash)
+		if parent == nil || parent.Hash() != current.ParentHash ||
+			parent.Number.Uint64()+1 != current.Number.Uint64() {
+			return false
+		}
+		current = parent
+	}
+	return current.Hash() == finalHash
+}
+
 func (a *balV13PendingEngineAPI) ForkchoiceUpdatedV4(ctx context.Context, update engine.ForkchoiceStateV1, attrs *engine.PayloadAttributes, custody *types.CustodyBitmap) (engine.ForkChoiceResponse, error) {
 	bc := a.service.BlockChain()
 	// Every FCU revokes the previous pending witness. A known canonical
@@ -55,7 +83,17 @@ func (a *balV13PendingEngineAPI) ForkchoiceUpdatedV4(ctx context.Context, update
 				finalHeader = header
 			}
 		}
-		if finalHeader != nil && finalHeader.Hash() == update.FinalizedBlockHash {
+		if finalHeader != nil && finalHeader.Hash() == update.FinalizedBlockHash &&
+			balV18ProveFinalizedAncestor(update.HeadBlockHash, update.FinalizedBlockHash, func(hash common.Hash) *types.Header {
+				if header := bc.GetHeaderByHash(hash); header != nil {
+					return header
+				}
+				header, err := a.service.Downloader().GetHeader(hash)
+				if err != nil {
+					return nil
+				}
+				return header
+			}) {
 			// This is an ephemeral exact-hash witness, not SETFINALIZED.
 			// The importer still requires authenticated hash ancestry
 			// through finalizedAncestryMember before every skipped block.
