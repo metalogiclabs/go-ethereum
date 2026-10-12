@@ -456,7 +456,6 @@ func TestBALEngineV11AuthenticatedForkchoiceBoundary(t *testing.T) {
 	}
 }
 
-
 // TestBALEngineV12ControlledPreauthorization holds the Engine API, corpus,
 // peers, finality HASH announcement, source, and protected future fixed while
 // varying only whether the exact finalized header is already installed in the
