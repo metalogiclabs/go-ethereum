@@ -13,14 +13,14 @@ permissions:
   contents: read
 
 jobs:
-  rejected-fcu-admission:
+  validation-before-authority:
     runs-on: ubuntu-latest
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-      - name: Pin official post-35930 Geth source
+      - name: Pin exact official Geth post-35930 ancestor
         shell: bash
         run: |
           set -euo pipefail
@@ -35,7 +35,7 @@ jobs:
         with:
           go-version: '1.27'
           cache: false
-      - name: Exact source format and prior negative controls
+      - name: Exact source formatting and protected original controls
         shell: bash
         run: |
           set -euo pipefail
@@ -43,106 +43,72 @@ jobs:
           paths=(core/bal_pending_finality_experiment.go eth/catalyst/bal_invalid_fcu_pending_v16_test.go eth/catalyst/bal_pending_engine_witness_v13_test.go)
           gofmt -d "${paths[@]}" | tee "$RUNNER_TEMP/bal-v17/gofmt.diff"
           test ! -s "$RUNNER_TEMP/bal-v17/gofmt.diff"
-          sha256sum "${paths[@]}" eth/catalyst/bal_pending_engine_witness_v13_test.go core/bal_apply.go | tee "$RUNNER_TEMP/bal-v17/source.sha256"
+          sha256sum "${paths[@]}" core/bal_apply.go core/blockchain.go | tee "$RUNNER_TEMP/bal-v17/source.sha256"
           go test ./core -run '^(TestBALReconstructionFinalityForkImport|TestInsertChainExecutesWhenReconstructionDisabled)$' -count=1 -timeout=20m
           go test -tags balexperiment ./core -run '^(TestBALPendingFinalityV15FenceRejectsRevokedAndABAPermits|TestBALPendingFinalityV15CommitFenceSerializesRevocation)$' -count=1 -timeout=20m
-      - name: Authenticated but invalid Engine FCU must expose pre-validation admission
+      - name: Two rejected malformed Engine FCUs must not grant a pending witness
         shell: bash
         run: |
           set -euo pipefail
           go test -tags balexperiment ./eth/catalyst -run '^TestBALInvalidFCUV17MalformedAttributesCannotAdmitPendingAuthority$' -count=2 -v -timeout=30m 2>&1 | tee "$RUNNER_TEMP/bal-v17/invalid-fcu.log"
           test "$(grep -c 'MG_BAL_V17_ARM' "$RUNNER_TEMP/bal-v17/invalid-fcu.log")" -eq 2
           test "$(grep -c 'MG_BAL_V17_VERDICT MALFORMED_V4_NO_PENDING_AUTHORITY' "$RUNNER_TEMP/bal-v17/invalid-fcu.log")" -eq 2
-      - name: Preserve positive accepted Engine FCU pending-witness transport
+      - name: Preserve V15 accepted nil-attributes Engine FCU reconstruction
         shell: bash
         run: |
           set -euo pipefail
-          go test -tags balexperiment ./eth/catalyst -run '^TestBALEngineV13VolatilePendingWitness
-        shell: bash
-        run: |
-          set -euo pipefail
-          python3 - "$RUNNER_TEMP/bal-v17" <<'PY'
-          import json,pathlib,sys
-          root=pathlib.Path(sys.argv[1])
-          records=[json.loads(x.split("MG_BAL_V17_ARM ",1)[1]) for x in
-                   (root/"invalid-fcu.log").read_text().splitlines() if "MG_BAL_V17_ARM " in x]
-          assert len(records)==2
-          for row in records:
-              assert row["invalid_rpc_rejected"] is True
-              assert "payload attributes" in row["error_text"].lower() or "withdrawals" in row["error_text"].lower()
-              assert row["pending_hash_after_invalid_rpc"]=="0x"+"00"*32
-              assert row["pending_witness_admissions"]==0
-              assert row["canonical_finalized_state_empty"] is True
-              assert row["no_block_import_started"] is True
-              assert row["zero_head_invalid_request_cleared"] is True
-          engine=[json.loads(x.split("MG_BAL_ENGINE_V13_ARM ",1)[1]) for x in
-                  (root/"positive-engine.log").read_text().splitlines() if "MG_BAL_ENGINE_V13_ARM " in x]
-          assert len(engine)==2
-          by={r["case"]:r for r in engine}
-          assert set(by)=={"engine-finalized-unknown","engine-pending-finality"}
-          cold,pending=by["engine-finalized-unknown"],by["engine-pending-finality"]
-          assert cold["executionless_tx_blocks"]==0
-          assert pending["executionless_tx_blocks"]>0
-          assert pending["pending_witness_admissions"]==1
-          for r in engine:
-              assert not r["finalized_before_sync"] and not r["finalized_after_import"]
-              assert r["reopened_receipts_match"] and r["reopened_state_match"]
-              assert r["executed_tx_blocks"]+r["executionless_tx_blocks"]==65
-              assert r["validated_bal_attachments"]>0
-          assert cold["head"]==pending["head"] and cold["state_root"]==pending["state_root"]
-          verdict={
-              "decision":"VALIDATION_FIRST_MALFORMED_V4_FAIL_CLOSED_WARRANTED_BOUNDED",
-              "rejected_bad_attribute_requests":2,
-              "pending_admissions_from_bad_requests":0,
-              "valid_nil_attribute_pending_Engine_skips":pending["executionless_tx_blocks"],
-              "V15_commit_epoch_guard":"RETAINED",
-              "accepted_nil_attrs_head_finalized_consistency":"NOT_FULLY_VERIFIED",
-              "real_independent_CL":"NOT_TESTED",
-              "upstream_acceptance":"UNKNOWN",
-          }
-          (root/"verdict.json").write_text(json.dumps(verdict,indent=2,sort_keys=True)+"\n")
-          print("MG_BAL_V17_VERDICT_JSON",json.dumps(verdict,sort_keys=True))
-
-          PY
-      - uses: actions/upload-artifact@v4
-        if: always()
-        with:
-          name: ethereum-bal-validation-first-v17-evidence
-          path: ${{ runner.temp }}/bal-v17/
-          if-no-files-found: ignore
- -count=1 -v -timeout=30m 2>&1 | tee "$RUNNER_TEMP/bal-v17/positive-engine.log"
+          go test -tags balexperiment ./eth/catalyst -run '^TestBALEngineV13VolatilePendingWitness$' -count=1 -v -timeout=30m 2>&1 | tee "$RUNNER_TEMP/bal-v17/positive-engine.log"
           test "$(grep -c 'MG_BAL_ENGINE_V13_ARM' "$RUNNER_TEMP/bal-v17/positive-engine.log")" -eq 2
-      - name: Independently seal invalid-FCU rejection and valid-FCU reuse
+      - name: Independently certify malformed denial plus legitimate transport
         shell: bash
         run: |
           set -euo pipefail
           python3 - "$RUNNER_TEMP/bal-v17" <<'PY'
-          import json,pathlib,sys
-          root=pathlib.Path(sys.argv[1])
-          arms=[json.loads(x.split("MG_BAL_V17_ARM ",1)[1]) for x in
-                (root/"invalid-fcu.log").read_text().splitlines() if "MG_BAL_V17_ARM " in x]
-          assert len(arms)==2
-          for row in arms:
+          import json, pathlib, sys
+          root = pathlib.Path(sys.argv[1])
+          bad = [json.loads(x.split("MG_BAL_V17_ARM ", 1)[1])
+                 for x in (root/"invalid-fcu.log").read_text().splitlines()
+                 if "MG_BAL_V17_ARM " in x]
+          assert len(bad) == 2
+          for row in bad:
               assert row["invalid_rpc_rejected"] is True
-              assert "payload attributes" in row["error_text"].lower() or "withdrawals" in row["error_text"].lower()
-              assert row["pending_hash_after_invalid_rpc"]==row["announced_finalized_hash"]
-              assert row["pending_witness_admissions"]==1
+              assert ("payload attributes" in row["error_text"].lower()
+                      or "withdrawals" in row["error_text"].lower())
+              assert row["pending_hash_after_invalid_rpc"] == "0x" + "00"*32
+              assert row["pending_witness_admissions"] == 0
               assert row["canonical_finalized_state_empty"] is True
               assert row["no_block_import_started"] is True
               assert row["zero_head_invalid_request_cleared"] is True
-          verdict={
-              "decision":"MALFORMED_V4_NO_PENDING_AUTHORITY",
-              "repeat_count":2,
-              "cause":"test wrapper admitted FCU finalized hash before Geth rejected malformed payload attributes",
-              "real_authenticated_engine_http_jwt":True,
-              "real_encrypted_Geth_peer_header_fetch":True,
-              "consensus_layer_driver":"TEST_CONTROLLED_NOT_INDEPENDENT_CL",
-              "V15_commit_epoch_guard":"PRESERVED_BUT_INSUFFICIENT_FOR_REQUEST_VALIDATION",
-              "next":"reject invalid Engine payload attributes before temporary witness admission, then test inconsistent head/finalized ancestry",
-              "upstream_acceptance":"UNKNOWN",
+          engine = [json.loads(x.split("MG_BAL_ENGINE_V13_ARM ", 1)[1])
+                    for x in (root/"positive-engine.log").read_text().splitlines()
+                    if "MG_BAL_ENGINE_V13_ARM " in x]
+          assert len(engine) == 2
+          by = {r["case"]: r for r in engine}
+          assert set(by) == {"engine-finalized-unknown","engine-pending-finality"}
+          cold, pending = by["engine-finalized-unknown"], by["engine-pending-finality"]
+          assert cold["executionless_tx_blocks"] == 0
+          assert pending["executionless_tx_blocks"] > 0
+          assert pending["pending_witness_admissions"] == 1
+          for arm in engine:
+              assert arm["authenticated_http"] is True
+              assert arm["initial_engine_status"] == "SYNCING"
+              assert not arm["finalized_before_sync"] and not arm["finalized_after_import"]
+              assert arm["reopened_receipts_match"] and arm["reopened_state_match"]
+              assert arm["executed_tx_blocks"] + arm["executionless_tx_blocks"] == 65
+              assert arm["validated_bal_attachments"] > 0
+          assert cold["head"] == pending["head"] and cold["state_root"] == pending["state_root"]
+          verdict = {
+              "decision": "VALIDATION_FIRST_MALFORMED_V4_FAIL_CLOSED_WARRANTED_BOUNDED",
+              "rejected_bad_attribute_requests": 2,
+              "pending_admissions_from_bad_requests": 0,
+              "valid_nil_attribute_pending_Engine_skips": pending["executionless_tx_blocks"],
+              "V15_commit_epoch_guard": "RETAINED",
+              "accepted_nil_attrs_head_finalized_consistency": "NOT_FULLY_VERIFIED",
+              "real_independent_CL": "NOT_TESTED",
+              "upstream_acceptance": "UNKNOWN"
           }
-          (root/"verdict.json").write_text(json.dumps(verdict,indent=2,sort_keys=True)+"\n")
-          print("MG_BAL_V17_VERDICT_JSON",json.dumps(verdict,sort_keys=True))
+          (root/"verdict.json").write_text(json.dumps(verdict, indent=2, sort_keys=True) + "\n")
+          print("MG_BAL_V17_VERDICT_JSON", json.dumps(verdict, sort_keys=True))
           PY
       - uses: actions/upload-artifact@v4
         if: always()
