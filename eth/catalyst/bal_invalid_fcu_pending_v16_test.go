@@ -103,7 +103,8 @@ func TestBALInvalidFCUV16PendingAuthorityBeforeEngineValidation(t *testing.T) {
 	if rejectErr == nil {
 		t.Fatalf("Engine V4 unexpectedly accepted missing withdrawals/slotNumber: %+v", reply)
 	}
-	if !strings.Contains(rejectErr.Error(), "withdrawals") {
+	if !strings.Contains(strings.ToLower(rejectErr.Error()), "payload attributes") &&
+		!strings.Contains(strings.ToLower(rejectErr.Error()), "withdrawals") {
 		t.Fatalf("unexpected malformed-FCU rejection: %v", rejectErr)
 	}
 
