@@ -84,14 +84,14 @@ func runBALV14RevokeBoundary(t *testing.T, arm string) balV14RevocationRow {
 		t.Fatalf("%s final contract counter=%d want=%d", arm, actual, calls)
 	}
 	row := balV14RevocationRow{
-		Arm: arm,
-		RevokeBarrierCalled: hit,
-		PendingRevoked: bc.pendingBALFinality() == nil,
+		Arm:                    arm,
+		RevokeBarrierCalled:    hit,
+		PendingRevoked:         bc.pendingBALFinality() == nil,
 		CanonicalFinalityEmpty: bc.CurrentFinalBlock() == nil && rawdb.ReadFinalizedBlockHash(db) == (common.Hash{}),
-		FirstBlockTxs: len(blocks[0].Transactions()),
-		FirstBlockReceipts: len(bc.GetReceiptsByHash(blocks[0].Hash())),
-		Head: final.Hash().Hex(),
-		StateRoot: final.Root().Hex(),
+		FirstBlockTxs:          len(blocks[0].Transactions()),
+		FirstBlockReceipts:     len(bc.GetReceiptsByHash(blocks[0].Hash())),
+		Head:                   final.Hash().Hex(),
+		StateRoot:              final.Root().Hex(),
 	}
 	for _, block := range blocks {
 		n := len(bc.GetReceiptsByHash(block.Hash()))
