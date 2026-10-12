@@ -3,9 +3,9 @@
 // Copyright 2026 The go-ethereum Authors
 // This file is part of the go-ethereum library.
 //
-// Deterministic V14 *counterexample*, not an assertion of production safety.
-// Revocation after authorization but before persistence may fail to prevent
-// executionless admission. A green test means the bug was reproduced, not fixed.
+// V15 fork-only repair: the exact V14 counterexample is preserved on its
+// original branch. This replay demands the opposite, safe behavior under
+// an epoch-bound, serialized authorization-to-commit fence.
 package core
 
 import (
@@ -59,10 +59,21 @@ func runBALV14RevokeBoundary(t *testing.T, arm string) balV14RevocationRow {
 				t.Fatal("admission barrier invoked more than once")
 			}
 			hit = true
+			bc.SetExperimentalBALAdmissionHook(nil)
 			bc.SetExperimentalPendingBALFinality(nil)
 			if bc.pendingBALFinality() != nil {
 				t.Fatal("pending witness failed to revoke at barrier")
 			}
+		})
+	case "revoke-and-regrant-same-hash":
+		bc.SetExperimentalBALAdmissionHook(func() {
+			if hit {
+				t.Fatal("ABA admission hook must fire only once")
+			}
+			hit = true
+			bc.SetExperimentalBALAdmissionHook(nil)
+			bc.SetExperimentalPendingBALFinality(nil)
+			bc.SetExperimentalPendingBALFinality(blocks[len(blocks)-1].Header())
 		})
 	default:
 		t.Fatalf("unknown arm %q", arm)
@@ -70,6 +81,11 @@ func runBALV14RevokeBoundary(t *testing.T, arm string) balV14RevocationRow {
 	inserted, err := bc.InsertChain(blocks)
 	if err != nil || inserted != len(blocks) {
 		t.Fatalf("%s inserted %d/%d: %v", arm, inserted, len(blocks), err)
+	}
+	// Revoke the ABA witness after the full import, not during it, so only
+	// the first-block stale-token check is at issue in that arm.
+	if arm == "revoke-and-regrant-same-hash" {
+		bc.SetExperimentalPendingBALFinality(nil)
 	}
 	final := blocks[len(blocks)-1]
 	gotHead := bc.CurrentBlock()
@@ -111,33 +127,37 @@ func runBALV14RevokeBoundary(t *testing.T, arm string) balV14RevocationRow {
 	return row
 }
 
-func TestBALPendingFinalityV14RevokeAfterAdmissionCounterexample(t *testing.T) {
+func TestBALPendingFinalityV15FenceRejectsRevokedAndABAPermits(t *testing.T) {
 	var rows []balV14RevocationRow
-	for _, arm := range []string{"revoked-before-admission", "revoked-after-eligibility-before-write"} {
+	for _, arm := range []string{"revoked-before-admission", "revoked-after-eligibility-before-write", "revoke-and-regrant-same-hash"} {
 		t.Run(arm, func(t *testing.T) {
 			r := runBALV14RevokeBoundary(t, arm)
 			bytes, err := json.Marshal(r)
 			if err != nil {
 				t.Fatal(err)
 			}
-			t.Logf("MG_BAL_V14_ARM %s", bytes)
+			t.Logf("MG_BAL_V15_ARM %s", bytes)
 			rows = append(rows, r)
 		})
 	}
-	if len(rows) != 2 {
-		t.Fatalf("wanted both isolated arms, got %d", len(rows))
+	if len(rows) != 3 {
+		t.Fatalf("wanted three isolated arms, got %d", len(rows))
 	}
-	before, after := rows[0], rows[1]
+	before, after, aba := rows[0], rows[1], rows[2]
 	if before.RevokeBarrierCalled || before.ExecutionlessBlocks != 0 ||
 		before.FirstBlockReceipts != before.FirstBlockTxs {
 		t.Fatalf("quiescent revocation control did not execute every block: %+v", before)
 	}
-	if !after.RevokeBarrierCalled || after.ExecutionlessBlocks != 1 ||
-		after.ExecutedBlocks != 2 || after.FirstBlockReceipts != 0 {
-		t.Fatalf("V14 counterexample did not reproduce exact post-revoke commit: %+v", after)
+	if !after.RevokeBarrierCalled || after.ExecutionlessBlocks != 0 ||
+		after.ExecutedBlocks != 3 || after.FirstBlockReceipts != after.FirstBlockTxs {
+		t.Fatalf("revoked V14 permit was not fenced and re-executed: %+v", after)
 	}
-	if before.Head != after.Head || before.StateRoot != after.StateRoot {
+	if !aba.RevokeBarrierCalled || aba.FirstBlockReceipts != aba.FirstBlockTxs {
+		t.Fatalf("ABA same-hash regrant incorrectly revived the old permit: %+v", aba)
+	}
+	if before.Head != after.Head || before.StateRoot != after.StateRoot ||
+		before.Head != aba.Head || before.StateRoot != aba.StateRoot {
 		t.Fatalf("authorization interleaving changed protected outcome: %+v", rows)
 	}
-	t.Log("MG_BAL_V14_VERDICT REJECTED_PENDING_WITNESS_LINEARIZABILITY_WITH_COUNTEREXAMPLE")
+	t.Log("MG_BAL_V15_VERDICT EPOCH_FENCE_REEXECUTES_REVOKED_AND_ABA")
 }

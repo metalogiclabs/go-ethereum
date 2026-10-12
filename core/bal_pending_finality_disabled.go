@@ -3,15 +3,26 @@
 // Copyright 2026 The go-ethereum Authors
 // This file is part of the go-ethereum library.
 //
-// Production / normal builds have no pending BAL finality authority.
-// The experimental path exists only in explicitly tagged fork tests.
+// Normal Geth has neither pending finality authority nor a commit
+// synchronization capability. Tagged research code is not in this build.
 package core
 
 import "github.com/ethereum/go-ethereum/core/types"
+
+type balPendingPermit struct{}
 
 func (bc *BlockChain) pendingBALFinality() *types.Header {
 	return nil
 }
 
-// The ordinary build never installs an admission hook.
+func (bc *BlockChain) pendingBALAdmissionPermit() balPendingPermit {
+	return balPendingPermit{}
+}
+
+func (bc *BlockChain) pendingBALCommitFence(_ balPendingPermit) (func(), bool) {
+	return func() {}, true
+}
+
+func (bc *BlockChain) experimentalPendingBALOnStop() {}
+
 func (bc *BlockChain) experimentalBALAdmissionBarrier() {}

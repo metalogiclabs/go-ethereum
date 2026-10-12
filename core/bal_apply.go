@@ -119,7 +119,7 @@ func (bc *BlockChain) useAccessListReconstruction(block *types.Block, vmConfig v
 // letting the caller fall back to full execution. Because receipts are a product
 // of execution, blocks stored this way carry none — the accepted receipt gap for
 // the finalized region, matching a snap-synced node's pre-pivot history.
-func (bc *BlockChain) processBlockFromAccessList(parentRoot common.Hash, block *types.Block, config ExecuteConfig) (*blockProcessingResult, error) {
+func (bc *BlockChain) processBlockFromAccessList(parentRoot common.Hash, block *types.Block, config ExecuteConfig, admission ...balPendingPermit) (*blockProcessingResult, error) {
 	start := time.Now()
 
 	// Build a plain reader over the parent state; no prefetcher is needed since
@@ -139,6 +139,19 @@ func (bc *BlockChain) processBlockFromAccessList(parentRoot common.Hash, block *
 	rules := bc.chainConfig.Rules(block.Number(), block.Difficulty().Sign() == 0, block.Time())
 	if root := statedb.IntermediateRoot(rules); root != block.Root() {
 		return nil, fmt.Errorf("reconstructed state root mismatch (have %x, want %x)", root, block.Root())
+	}
+
+	// An admission proof is not irrevocable: a concurrent Engine FCU may
+	// supersede or revoke pending-finality while reconstruction computes.
+	// Acquire a same-epoch read fence immediately before the durable write,
+	// then retain it until that write finishes. A revoked admission falls
+	// back to full execution through the existing caller.
+	if config.WriteState && len(admission) > 0 {
+		release, permitted := bc.pendingBALCommitFence(admission[0])
+		if !permitted {
+			return nil, fmt.Errorf("BAL pending finality superseded before commit")
+		}
+		defer release()
 	}
 
 	// Persist the block and its reconstructed state through the same write path

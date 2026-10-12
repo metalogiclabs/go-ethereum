@@ -1,0 +1,135 @@
+name: Ethereum BAL Pending Commit Epoch Fence V15 (Fork Only)
+
+on:
+  push:
+    branches:
+      - bal-pending-commit-fence-v15
+  pull_request:
+    branches:
+      - bal-pending-revoke-admission-v14
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  versioned-revoke-commit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Exact official Geth ancestor
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "Metalogic Research CI"
+          git config user.email "ci@mathgraph.org"
+          git fetch --no-tags https://github.com/ethereum/go-ethereum.git 3a6c2e3b35ef8caa3d39dcbea3fe9f09099cca8c
+          git merge --no-edit FETCH_HEAD
+          git merge-base --is-ancestor 3a6c2e3b35ef8caa3d39dcbea3fe9f09099cca8c HEAD
+          echo "MG_BAL_V15_SOURCE_HEAD=$(git rev-parse HEAD)"
+          echo "MG_BAL_V15_SOURCE_TREE=$(git rev-parse HEAD^{tree})"
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.27'
+          cache: false
+      - name: Source hash and gofmt
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/bal-v15"
+          paths=(
+            core/blockchain.go
+            core/bal_apply.go
+            core/bal_pending_finality_disabled.go
+            core/bal_pending_finality_experiment.go
+            core/bal_pending_revoke_admission_v14_test.go
+            core/bal_pending_commit_fence_v15_test.go
+          )
+          gofmt -d "${paths[@]}" | tee "$RUNNER_TEMP/bal-v15/gofmt.diff"
+          test ! -s "$RUNNER_TEMP/bal-v15/gofmt.diff"
+          sha256sum "${paths[@]}" | tee "$RUNNER_TEMP/bal-v15/source.sha256"
+      - name: Ordinary Geth protected chain, source and fork negatives
+        shell: bash
+        run: |
+          set -euo pipefail
+          go test ./core -run '^(TestInsertChainReconstructsFinalizedState|TestInsertChainExecutesWhenReconstructionDisabled|TestBALReconstructionFinalityForkImport|TestBALFinalityMultiwindowInsertChain)$' -count=1 -timeout=20m
+          go test ./eth/downloader -run '^TestBALBoundedGrace' -count=1 -timeout=20m
+      - name: Tagged prior V13 finality and ancestry negative controls
+        shell: bash
+        run: |
+          set -euo pipefail
+          go test -tags balexperiment ./core -run '^(TestBALPendingFinalityV13HashAndRevocation|TestBALFinalityWindowFailsClosedOnMissingSkeleton|TestBALFinalityWindowCrossesCheckpointsAndRevokes|TestBALReconstructionFinalityForkImport)$' -count=1 -timeout=20m
+      - name: Reproduce then CLOSE V14 revoked and ABA admission counterexample
+        shell: bash
+        run: |
+          set -euo pipefail
+          go test -tags balexperiment ./core -run '^(TestBALPendingFinalityV15FenceRejectsRevokedAndABAPermits|TestBALPendingFinalityV15CommitFenceSerializesRevocation)$' -count=3 -v -timeout=20m 2>&1 | tee "$RUNNER_TEMP/bal-v15/epoch-fence.log"
+          test "$(grep -c 'MG_BAL_V15_ARM' "$RUNNER_TEMP/bal-v15/epoch-fence.log")" -eq 9
+          test "$(grep -c 'MG_BAL_V15_VERDICT EPOCH_FENCE_REEXECUTES_REVOKED_AND_ABA' "$RUNNER_TEMP/bal-v15/epoch-fence.log")" -eq 3
+          test "$(grep -c 'MG_BAL_V15_FENCE SERIALIZED_COMMIT_AND_EPOCH_ABA' "$RUNNER_TEMP/bal-v15/epoch-fence.log")" -eq 3
+      - name: Preserve positive actual authenticated Engine pending-witness reuse
+        shell: bash
+        run: |
+          set -euo pipefail
+          go test -tags balexperiment ./eth/catalyst -run '^TestBALEngineV13VolatilePendingWitness$' -count=1 -v -timeout=30m 2>&1 | tee "$RUNNER_TEMP/bal-v15/engine.log"
+          test "$(grep -c 'MG_BAL_ENGINE_V13_ARM' "$RUNNER_TEMP/bal-v15/engine.log")" -eq 2
+      - name: Independent fail-closed epoch and positive Engine evidence gate
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - "$RUNNER_TEMP/bal-v15" <<'PY'
+          import json, pathlib, sys
+          root=pathlib.Path(sys.argv[1])
+          rows=[json.loads(line.split("MG_BAL_V15_ARM ",1)[1]) for line in (root/"epoch-fence.log").read_text().splitlines() if "MG_BAL_V15_ARM " in line]
+          assert len(rows)==9
+          by={"revoked-before-admission":[],"revoked-after-eligibility-before-write":[],"revoke-and-regrant-same-hash":[]}
+          for row in rows:
+              by[row["arm"]].append(row)
+              assert row["pending_revoked"] and row["canonical_finality_empty"]
+              assert row["executed_blocks"]+row["executionless_blocks"]==3
+          for before,after,aba in zip(*[by[x] for x in by]):
+              assert not before["revoke_barrier_called"]
+              assert before["executed_blocks"]==3 and before["executionless_blocks"]==0
+              assert after["revoke_barrier_called"]
+              assert after["executed_blocks"]==3 and after["executionless_blocks"]==0
+              assert aba["revoke_barrier_called"]
+              assert before["first_block_receipts"]==after["first_block_receipts"]==aba["first_block_receipts"]==2
+              assert before["head"]==after["head"]==aba["head"]
+              assert before["state_root"]==after["state_root"]==aba["state_root"]
+          engine=[json.loads(line.split("MG_BAL_ENGINE_V13_ARM ",1)[1]) for line in (root/"engine.log").read_text().splitlines() if "MG_BAL_ENGINE_V13_ARM " in line]
+          assert len(engine)==2
+          e={x["case"]:x for x in engine}
+          assert set(e)=={"engine-finalized-unknown","engine-pending-finality"}
+          cold,pending=e["engine-finalized-unknown"],e["engine-pending-finality"]
+          assert cold["executionless_tx_blocks"]==0
+          assert pending["executionless_tx_blocks"]>0
+          assert not cold["finalized_after_import"] and not pending["finalized_after_import"]
+          for x in engine:
+              assert x["reopened_receipts_match"] and x["reopened_state_match"]
+              assert x["executed_tx_blocks"]+x["executionless_tx_blocks"]==65
+              assert 0 <= x["grace_charged_ms"] <= 25.00001
+          assert cold["head"]==pending["head"] and cold["state_root"]==pending["state_root"]
+          verdict={
+              "decision":"EPOCH_FENCED_REVOKE_ADMISSION_WARRANTED_BOUNDED",
+              "exact_counterexample_repetitions":3,
+              "revoked_at_admission_executionless":0,
+              "ABA_same_hash_stale_first_block_executionless":0,
+              "commit_revoke_lock_trials":3,
+              "tagged_Engine_pending_witness_executionless":pending["executionless_tx_blocks"],
+              "normal_build_original_path_preserved":True,
+              "concurrent_authentication_or_invalid_FCU_safety":"NOT_TESTED",
+              "real_CL_and_mainnet_throughput":"UNKNOWN",
+              "upstream_acceptance":"UNKNOWN",
+          }
+          (root/"verdict.json").write_text(json.dumps(verdict,sort_keys=True,indent=2)+"\n")
+          print("MG_BAL_V15_VERDICT",json.dumps(verdict,sort_keys=True))
+          PY
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: ethereum-bal-epoch-fence-v15-evidence
+          path: ${{ runner.temp }}/bal-v15/
+          if-no-files-found: ignore
