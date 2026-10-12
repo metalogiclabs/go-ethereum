@@ -1435,6 +1435,7 @@ func (bc *BlockChain) stopWithoutSaving() {
 // it will abort them using the procInterrupt.
 func (bc *BlockChain) Stop() {
 	bc.stopWithoutSaving()
+	bc.experimentalPendingBALOnStop() // No-op outside fork research build.
 
 	// Ensure that the entirety of the state snapshot is journaled to disk.
 	var snapBase common.Hash
@@ -2349,12 +2350,13 @@ func (bc *BlockChain) ProcessBlock(ctx context.Context, parentRoot common.Hash, 
 	// post-values instead of executing its transactions. Any failure falls
 	// through to full execution below, so a bad access list can never advance
 	// the head.
+	permit := bc.pendingBALAdmissionPermit()
 	if bc.useAccessListReconstruction(block, vmConfig) {
 		// Fork-only deterministic adversarial interleaving: normal builds
 		// have a no-op method; the tagged test can revoke between admission
 		// and the ensuing persistence boundary without changing the result.
 		bc.experimentalBALAdmissionBarrier()
-		res, err := bc.processBlockFromAccessList(parentRoot, block, config)
+		res, err := bc.processBlockFromAccessList(parentRoot, block, config, permit)
 		if err == nil {
 			return res, nil
 		}
