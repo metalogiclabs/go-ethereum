@@ -12,3 +12,6 @@ import "github.com/ethereum/go-ethereum/core/types"
 func (bc *BlockChain) pendingBALFinality() *types.Header {
 	return nil
 }
+
+// The ordinary build never installs an admission hook.
+func (bc *BlockChain) experimentalBALAdmissionBarrier() {}
