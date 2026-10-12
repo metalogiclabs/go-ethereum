@@ -1,0 +1,111 @@
+name: Ethereum BAL Post-Revocation Admission V14 (Fork Only)
+
+on:
+  push:
+    branches:
+      - bal-pending-revoke-admission-v14
+  pull_request:
+    branches:
+      - bal-pending-finality-witness-v13
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  revoke-at-admission:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Exact upstream-pinned source
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "Metalogic Research CI"
+          git config user.email "ci@mathgraph.org"
+          git fetch --no-tags https://github.com/ethereum/go-ethereum.git 3a6c2e3b35ef8caa3d39dcbea3fe9f09099cca8c
+          git merge --no-edit FETCH_HEAD
+          git merge-base --is-ancestor 3a6c2e3b35ef8caa3d39dcbea3fe9f09099cca8c HEAD
+          echo "MG_BAL_V14_SOURCE_HEAD=$(git rev-parse HEAD)"
+          echo "MG_BAL_V14_SOURCE_TREE=$(git rev-parse HEAD^{tree})"
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.27'
+          cache: false
+      - name: Formatter and source digest
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/bal-v14"
+          paths=(
+            core/blockchain.go
+            core/bal_pending_finality_disabled.go
+            core/bal_pending_finality_experiment.go
+            core/bal_pending_revoke_admission_v14_test.go
+          )
+          gofmt -d "${paths[@]}" | tee "$RUNNER_TEMP/bal-v14/format.diff"
+          test ! -s "$RUNNER_TEMP/bal-v14/format.diff"
+          sha256sum "${paths[@]}" | tee "$RUNNER_TEMP/bal-v14/source.sha256"
+      - name: Untagged Geth retains original protected behavior
+        shell: bash
+        run: |
+          set -euo pipefail
+          go test ./core -run '^(TestInsertChainReconstructsFinalizedState|TestInsertChainExecutesWhenReconstructionDisabled|TestBALReconstructionFinalityForkImport|TestBALFinalityMultiwindowInsertChain)$' -count=1 -timeout=18m
+      - name: Tagged exact fork ancestry and quiescent-revoke regression
+        shell: bash
+        run: |
+          set -euo pipefail
+          go test -tags balexperiment ./core -run '^(TestBALPendingFinalityV13HashAndRevocation|TestBALFinalityWindowFailsClosedOnMissingSkeleton|TestBALReconstructionFinalityForkImport)$' -count=1 -timeout=18m
+      - name: Deterministic between-admission-and-commit revocation test
+        shell: bash
+        run: |
+          set -euo pipefail
+          go test -tags balexperiment ./core -run '^TestBALPendingFinalityV14RevokeAfterAdmissionCounterexample$' -count=3 -v -timeout=18m 2>&1 | tee "$RUNNER_TEMP/bal-v14/counterexample.log"
+          test "$(grep -c 'MG_BAL_V14_ARM' "$RUNNER_TEMP/bal-v14/counterexample.log")" -eq 6
+          test "$(grep -c 'MG_BAL_V14_VERDICT REJECTED_PENDING_WITNESS_LINEARIZABILITY_WITH_COUNTEREXAMPLE' "$RUNNER_TEMP/bal-v14/counterexample.log")" -eq 3
+      - name: Independently qualify narrow negative result
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - "$RUNNER_TEMP/bal-v14" <<'PY'
+          import json, pathlib, sys
+          root=pathlib.Path(sys.argv[1])
+          lines=(root/"counterexample.log").read_text().splitlines()
+          cases=[json.loads(x.split("MG_BAL_V14_ARM ",1)[1]) for x in lines if "MG_BAL_V14_ARM " in x]
+          assert len(cases)==6
+          by={"revoked-before-admission":[],"revoked-after-eligibility-before-write":[]}
+          for c in cases:
+              by[c["arm"]].append(c)
+              assert c["pending_revoked"] and c["canonical_finality_empty"]
+              assert c["executed_blocks"]+c["executionless_blocks"]==3
+          for control,post in zip(by["revoked-before-admission"],by["revoked-after-eligibility-before-write"]):
+              assert not control["revoke_barrier_called"]
+              assert control["executed_blocks"]==3 and control["executionless_blocks"]==0
+              assert control["first_block_receipts"]==control["first_block_txs"]==2
+              assert post["revoke_barrier_called"]
+              assert post["executed_blocks"]==2 and post["executionless_blocks"]==1
+              assert post["first_block_receipts"]==0 and post["first_block_txs"]==2
+              assert post["head"]==control["head"] and post["state_root"]==control["state_root"]
+          result={
+              "decision":"REJECTED_PENDING_WITNESS_LINEARIZABILITY_WITH_COUNTEREXAMPLE",
+              "repeat_count":3,
+              "admission_revocation_interleaving":"revoke exact pending hash after useAccessListReconstruction returns true but before processBlockFromAccessList starts",
+              "revoked_before_admission_executes_blocks":3,
+              "revoked_after_admission_commits_executionless_blocks":1,
+              "correct_final_state_root":True,
+              "canonical_finalized_hash_persisted":False,
+              "production_safety":"NOT_WARRANTED",
+              "next":"versioned admission-to-commit fence; reject/reexecute on epoch change, then test revocation during state persistence",
+          }
+          (root/"verdict.json").write_text(json.dumps(result,indent=2,sort_keys=True)+"\n")
+          print("MG_BAL_V14_VERDICT",json.dumps(result,sort_keys=True))
+          PY
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: ethereum-bal-postrevoke-v14-evidence
+          path: ${{ runner.temp }}/bal-v14/
+          if-no-files-found: ignore

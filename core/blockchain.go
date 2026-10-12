@@ -2350,6 +2350,10 @@ func (bc *BlockChain) ProcessBlock(ctx context.Context, parentRoot common.Hash, 
 	// through to full execution below, so a bad access list can never advance
 	// the head.
 	if bc.useAccessListReconstruction(block, vmConfig) {
+		// Fork-only deterministic adversarial interleaving: normal builds
+		// have a no-op method; the tagged test can revoke between admission
+		// and the ensuing persistence boundary without changing the result.
+		bc.experimentalBALAdmissionBarrier()
 		res, err := bc.processBlockFromAccessList(parentRoot, block, config)
 		if err == nil {
 			return res, nil

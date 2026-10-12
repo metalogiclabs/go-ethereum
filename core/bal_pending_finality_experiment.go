@@ -34,3 +34,21 @@ func (bc *BlockChain) pendingBALFinality() *types.Header {
 	}
 	return raw.(*types.Header)
 }
+
+// Fork-only deterministic callback injected after eligibility and before BAL
+// reconstruction/commit. The hook has no production build representation.
+var experimentalBALAdmissionHooks sync.Map // *BlockChain -> func()
+
+func (bc *BlockChain) SetExperimentalBALAdmissionHook(hook func()) {
+	if hook == nil {
+		experimentalBALAdmissionHooks.Delete(bc)
+		return
+	}
+	experimentalBALAdmissionHooks.Store(bc, hook)
+}
+
+func (bc *BlockChain) experimentalBALAdmissionBarrier() {
+	if raw, ok := experimentalBALAdmissionHooks.Load(bc); ok {
+		raw.(func())()
+	}
+}
