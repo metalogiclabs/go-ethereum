@@ -1,0 +1,123 @@
+name: Ethereum BAL Engine Prevalidation V17 (Fork Only)
+
+on:
+  push:
+    branches:
+      - bal-engine-prevalidation-v17
+  pull_request:
+    branches:
+      - bal-invalid-fcu-authority-v16
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  validated-pending-admission:
+    runs-on: ubuntu-latest
+    timeout-minutes: 65
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Pin official post-35930 Geth source
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "Metalogic Research CI"
+          git config user.email "ci@mathgraph.org"
+          git fetch --no-tags https://github.com/ethereum/go-ethereum.git 3a6c2e3b35ef8caa3d39dcbea3fe9f09099cca8c
+          git merge --no-edit FETCH_HEAD
+          git merge-base --is-ancestor 3a6c2e3b35ef8caa3d39dcbea3fe9f09099cca8c HEAD
+          echo "MG_BAL_V17_MERGED_HEAD=$(git rev-parse HEAD)"
+          echo "MG_BAL_V17_MERGED_TREE=$(git rev-parse HEAD^{tree})"
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.27'
+          cache: false
+      - name: Format and exact source pins
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/bal-v17"
+          paths=(eth/catalyst/api.go eth/catalyst/bal_pending_engine_witness_v13_test.go eth/catalyst/bal_invalid_fcu_pending_v17_test.go)
+          gofmt -d "${paths[@]}" | tee "$RUNNER_TEMP/bal-v17/gofmt.diff"
+          test ! -s "$RUNNER_TEMP/bal-v17/gofmt.diff"
+          sha256sum "${paths[@]}" core/bal_apply.go core/bal_pending_finality_experiment.go | tee "$RUNNER_TEMP/bal-v17/source.sha256"
+      - name: Ordinary Geth V4 semantics and epoch fence protection
+        shell: bash
+        run: |
+          set -euo pipefail
+          go test ./eth/catalyst -run '^TestForkchoiceUpdatedV4$' -count=1 -timeout=20m
+          go test ./core -run '^(TestBALReconstructionFinalityForkImport|TestInsertChainExecutesWhenReconstructionDisabled)$' -count=1 -timeout=20m
+          go test -tags balexperiment ./core -run '^(TestBALPendingFinalityV15FenceRejectsRevokedAndABAPermits|TestBALPendingFinalityV15CommitFenceSerializesRevocation)$' -count=1 -timeout=20m
+      - name: Rejected Engine V4 attributes never admit pending finality
+        shell: bash
+        run: |
+          set -euo pipefail
+          go test -tags balexperiment ./eth/catalyst -run '^TestBALInvalidFCUV17RejectedBeforePendingAdmission$' -count=2 -v -timeout=20m \
+            2>&1 | tee "$RUNNER_TEMP/bal-v17/invalid-attributes.log"
+          test "$(grep -c 'MG_BAL_V17_ARM' "$RUNNER_TEMP/bal-v17/invalid-attributes.log")" -eq 2
+      - name: Preserve valid authenticated Engine rescue
+        shell: bash
+        run: |
+          set -euo pipefail
+          go test -tags balexperiment ./eth/catalyst -run '^TestBALEngineV13VolatilePendingWitness$' -count=1 -v -timeout=30m \
+            2>&1 | tee "$RUNNER_TEMP/bal-v17/positive-engine.log"
+          grep -q '^PASS$' "$RUNNER_TEMP/bal-v17/positive-engine.log"
+          test "$(grep -c 'MG_BAL_ENGINE_V13_ARM' "$RUNNER_TEMP/bal-v17/positive-engine.log")" -eq 2
+      - name: Independently seal scoped behavioral verdict
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - "$RUNNER_TEMP/bal-v17" <<'PY'
+          import json,pathlib,sys
+          root=pathlib.Path(sys.argv[1])
+          rejected=[json.loads(line.split("MG_BAL_V17_ARM ",1)[1])
+              for line in (root/"invalid-attributes.log").read_text().splitlines()
+              if "MG_BAL_V17_ARM " in line]
+          assert len(rejected)==2
+          for r in rejected:
+              assert r["rejected_variants"]==[
+                  "missing-withdrawals","missing-beacon-root","missing-slot-number"]
+              assert r["pending_admissions"]==0
+              assert r["pending_hash_after_rejections"]=="0x"+"00"*32
+              assert r["canonical_finality_still_empty"] is True
+              assert r["no_block_import_started"] is True
+              assert r["zero_head_invalid_request_cleared"] is True
+          positive=[json.loads(line.split("MG_BAL_ENGINE_V13_ARM ",1)[1])
+              for line in (root/"positive-engine.log").read_text().splitlines()
+              if "MG_BAL_ENGINE_V13_ARM " in line]
+          assert len(positive)==2
+          cases={r["case"]:r for r in positive}
+          assert set(cases)=={"engine-finalized-unknown","engine-pending-finality"}
+          cold,admitted=cases["engine-finalized-unknown"],cases["engine-pending-finality"]
+          assert cold["executionless_tx_blocks"]==0
+          assert admitted["executionless_tx_blocks"]>0
+          assert admitted["pending_witness_admissions"]>0
+          assert cold["head"]==admitted["head"] and cold["state_root"]==admitted["state_root"]
+          for r in positive:
+              assert r["authenticated_http"] and r["reopened_receipts_match"] and r["reopened_state_match"]
+              assert r["finalized_after_import"] is False
+              assert r["executed_tx_blocks"]+r["executionless_tx_blocks"]==65
+          verdict={
+              "decision":"V17_MALFORMED_FCU_PREVALIDATION_WARRANTED_BOUNDED",
+              "prevalidation_source":"shared exact side-effect-free V4 attributes validation",
+              "negative_variants":rejected[0]["rejected_variants"],
+              "rejected_pending_admissions":0,
+              "valid_fcu_restored_executionless":admitted["executionless_tx_blocks"],
+              "v15_epoch_commit_fence":"PROTECTED",
+              "inconsistent_head_finalized_ancestry":"NOT_TESTED",
+              "other_semantically_invalid_engine_requests":"NOT_TESTED",
+              "external_consensus_client":"NOT_TESTED",
+              "upstream_acceptance":"UNKNOWN",
+          }
+          (root/"verdict.json").write_text(json.dumps(verdict,indent=2,sort_keys=True)+"\n")
+          print("MG_BAL_V17_VERDICT",json.dumps(verdict,sort_keys=True))
+          PY
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: ethereum-bal-engine-prevalidation-v17-evidence
+          path: ${{ runner.temp }}/bal-v17/
+          if-no-files-found: ignore
