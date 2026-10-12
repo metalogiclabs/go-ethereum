@@ -149,3 +149,12 @@ func (bc *BlockChain) experimentalBALAdmissionBarrier() {
 		raw.(func())()
 	}
 }
+
+// ExperimentalPendingBALFinalityHash is deliberately tag-only and observes
+// the currently stored volatile witness for adversarial Engine API tests.
+func (bc *BlockChain) ExperimentalPendingBALFinalityHash() common.Hash {
+	if header := bc.pendingBALFinality(); header != nil {
+		return header.Hash()
+	}
+	return common.Hash{}
+}
