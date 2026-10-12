@@ -1,0 +1,128 @@
+name: Ethereum BAL Volatile Pending Finality Witness V13 (Fork Only)
+
+on:
+  push:
+    branches:
+      - bal-pending-finality-witness-v13
+  pull_request:
+    branches:
+      - bal-engine-authority-timing-v12
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  pending-authority-separator:
+    runs-on: ubuntu-latest
+    timeout-minutes: 65
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Pin Geth including merged snap2 ancestry fix
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "Metalogic Research CI"
+          git config user.email "ci@mathgraph.org"
+          git fetch --no-tags https://github.com/ethereum/go-ethereum.git 3a6c2e3b35ef8caa3d39dcbea3fe9f09099cca8c
+          git merge --no-edit FETCH_HEAD
+          git merge-base --is-ancestor 3a6c2e3b35ef8caa3d39dcbea3fe9f09099cca8c HEAD
+          echo "MG_BAL_V13_MERGED_HEAD=$(git rev-parse HEAD)"
+          echo "MG_BAL_V13_MERGED_TREE=$(git rev-parse HEAD^{tree})"
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.27'
+          cache: false
+      - name: Source, format, and ordinary Geth negative controls
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/bal-v13"
+          paths=(
+            core/bal_apply.go
+            core/bal_finality_window.go
+            core/bal_pending_finality_disabled.go
+            core/bal_pending_finality_experiment.go
+            core/bal_pending_finality_experiment_test.go
+            eth/catalyst/bal_engine_forkchoice_boundary_v11_test.go
+            eth/catalyst/bal_pending_engine_witness_v13_test.go
+          )
+          gofmt -d "${paths[@]}" | tee "$RUNNER_TEMP/bal-v13/gofmt.txt"
+          test ! -s "$RUNNER_TEMP/bal-v13/gofmt.txt"
+          sha256sum "${paths[@]}" | tee "$RUNNER_TEMP/bal-v13/source.sha256"
+          go test ./core -run '^(TestBALFinalityMultiwindowInsertChain|TestBALReconstructionFinalityForkImport|TestBALReconstructionRejectsBrokenSkeletonChain|TestInsertChainExecutesWhenReconstructionDisabled)$' -count=1 -timeout=20m
+          go test ./eth/downloader -run '^TestBALBoundedGrace' -count=1 -timeout=20m
+      - name: Tagged pending-capability exact negative and restart controls
+        shell: bash
+        run: |
+          set -euo pipefail
+          go test -tags balexperiment ./core -run '^(TestBALPendingFinalityV13HashAndRevocation|TestBALFinalityWindowRejectsForkedChild|TestBALFinalityWindowFailsClosedOnMissingSkeleton|TestBALFinalityWindowCrossesCheckpointsAndRevokes)$' -count=1 -v -timeout=20m 2>&1 | tee "$RUNNER_TEMP/bal-v13/core-negatives.log"
+          grep -q -- '--- PASS: TestBALPendingFinalityV13HashAndRevocation' "$RUNNER_TEMP/bal-v13/core-negatives.log"
+      - name: Compile and pin authenticated Engine test binary
+        shell: bash
+        run: |
+          set -euo pipefail
+          go test -c -tags balexperiment -o "$RUNNER_TEMP/bal-v13/engine-v13.test" ./eth/catalyst
+          sha256sum "$RUNNER_TEMP/bal-v13/engine-v13.test" | tee "$RUNNER_TEMP/bal-v13/binary.sha256"
+      - name: Causal direct Engine FCU with and without pending witness
+        shell: bash
+        run: |
+          set -euo pipefail
+          "$RUNNER_TEMP/bal-v13/engine-v13.test" \
+            -test.run '^TestBALEngineV13VolatilePendingWitness$' -test.v -test.count=1 -test.timeout=40m \
+            2>&1 | tee "$RUNNER_TEMP/bal-v13/engine.log"
+          grep -q '^PASS$' "$RUNNER_TEMP/bal-v13/engine.log"
+          test "$(grep -c 'MG_BAL_ENGINE_V13_ARM' "$RUNNER_TEMP/bal-v13/engine.log")" -eq 2
+      - name: Independently seal exact evidence and scoped verdict
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - "$RUNNER_TEMP/bal-v13" <<'PY'
+          import json, pathlib, sys
+          root = pathlib.Path(sys.argv[1])
+          logs = (root/"engine.log").read_text().splitlines()
+          rows=[json.loads(s.split("MG_BAL_ENGINE_V13_ARM ",1)[1]) for s in logs
+                if "MG_BAL_ENGINE_V13_ARM " in s]
+          assert len(rows)==2, ("wrong number of independent Engine arms",len(rows))
+          data={r["case"]:r for r in rows}
+          assert set(data)=={"engine-finalized-unknown","engine-pending-finality"},list(data)
+          cold,pending=data["engine-finalized-unknown"],data["engine-pending-finality"]
+          for r in rows:
+              assert r["authenticated_http"] is True and r["engine_method"]=="engine_forkchoiceUpdatedV4"
+              assert r["initial_engine_status"]=="SYNCING"
+              assert r["finalized_before_sync"] is False and r["finalized_after_import"] is False
+              assert r["peer_count"]==2 and r["transaction_blocks"]==65 and r["sender_nonce"]==65
+              assert r["validated_bal_attachments"]>0
+              assert r["executed_tx_blocks"]+r["executionless_tx_blocks"]==65
+              assert r["reopened_receipts_match"] is True and r["reopened_state_match"] is True
+              assert r["finalized_after_rpc_replay"] is True
+              assert 0<=r["grace_charged_ms"]<=25.00001
+          assert cold["head"]==pending["head"] and cold["state_root"]==pending["state_root"]
+          assert cold["pending_witness_admissions"]==0
+          assert cold["executed_tx_blocks"]==65 and cold["executionless_tx_blocks"]==0
+          assert pending["pending_witness_admissions"]>0
+          assert pending["executionless_tx_blocks"]>0
+          verdict={
+              "decision":"VOLATILE_PENDING_FINALITY_ENGINE_RESCUE_WARRANTED_BOUNDED",
+              "scope":"authenticated Engine HTTP/JWT with test driver, 2 genuine Geth encrypted TCP peers and 260 Amsterdam blocks",
+              "no_canonical_finalized_state_during_import":True,
+              "cold_executionless":cold["executionless_tx_blocks"],
+              "pending_executionless":pending["executionless_tx_blocks"],
+              "pending_witness_admissions":pending["pending_witness_admissions"],
+              "pending_validated_bal_attachments":pending["validated_bal_attachments"],
+              "single_chain_revoke_and_restart_tests":"PASSED",
+              "concurrent_fcu_reorg_or_crash_safety":"NOT_TESTED",
+              "real_consensus_client":"NOT_TESTED",
+              "upstream_acceptance":"UNKNOWN",
+          }
+          (root/"verdict.json").write_text(json.dumps(verdict,sort_keys=True,indent=2)+"\n")
+          print("MG_BAL_V13_VERDICT",json.dumps(verdict,sort_keys=True))
+          PY
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: ethereum-bal-volatile-finality-v13-evidence
+          path: ${{ runner.temp }}/bal-v13/
+          if-no-files-found: ignore
