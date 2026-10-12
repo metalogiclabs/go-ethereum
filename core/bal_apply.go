@@ -141,6 +141,11 @@ func (bc *BlockChain) processBlockFromAccessList(parentRoot common.Hash, block *
 		return nil, fmt.Errorf("reconstructed state root mismatch (have %x, want %x)", root, block.Root())
 	}
 
+	// Fork-only causal separator: the caller may hold the importer precisely
+	// after root verification and before any reconstructed state is committed.
+	// This is inert in normal Geth builds.
+	bc.experimentalBALBeforeCommit(block)
+
 	// Persist the block and its reconstructed state through the same write path
 	// as normal execution, but without receipts or logs.
 	var status WriteStatus
