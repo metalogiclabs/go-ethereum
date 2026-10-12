@@ -433,6 +433,11 @@ func runBALEngineV11(t *testing.T, scenario string, genesis *core.Genesis, block
 	if r.GraceChargedMS > 25.00001 {
 		t.Fatalf("total grace budget exceeded: %+v", r)
 	}
+	if scenario == "engine-pending-finality" {
+		// The pending authority is a volatile research-only capability.
+		// Its lifetime ends with the Engine/sync test node, not a GC cycle.
+		target.BlockChain().SetExperimentalPendingBALFinality(nil)
+	}
 	if err := targetStack.Close(); err != nil {
 		t.Fatal(err)
 	}
