@@ -31,7 +31,7 @@ type balPendingPermit struct {
 }
 
 var experimentalPendingBALFinality sync.Map // *BlockChain -> *balPendingState
-var experimentalBALAdmissionHooks sync.Map // *BlockChain -> func()
+var experimentalBALAdmissionHooks sync.Map  // *BlockChain -> func()
 
 func (bc *BlockChain) pendingBALState() *balPendingState {
 	if raw, ok := experimentalPendingBALFinality.Load(bc); ok {
