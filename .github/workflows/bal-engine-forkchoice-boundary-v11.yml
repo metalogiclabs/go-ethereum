@@ -40,7 +40,7 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p "$RUNNER_TEMP/bal-v11"
-          gofmt -l eth/catalyst/bal_engine_forkchoice_boundary_v11_test.go > "$RUNNER_TEMP/bal-v11/gofmt.txt"
+          gofmt -d eth/catalyst/bal_engine_forkchoice_boundary_v11_test.go | tee "$RUNNER_TEMP/bal-v11/gofmt.txt"
           test ! -s "$RUNNER_TEMP/bal-v11/gofmt.txt"
           sha256sum eth/catalyst/bal_engine_forkchoice_boundary_v11_test.go eth/downloader/queue.go eth/downloader/bal_grace_experiment_v7.go | tee "$RUNNER_TEMP/bal-v11/source.sha256"
           go test ./core -run '^(TestBALFinalityMultiwindowInsertChain|TestBALReconstructionFinalityForkImport|TestBALReconstructionRejectsBrokenSkeletonChain)$' -count=1 -timeout=15m
