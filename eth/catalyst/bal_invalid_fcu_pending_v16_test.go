@@ -95,7 +95,7 @@ func TestBALInvalidFCUV16PendingAuthorityBeforeEngineValidation(t *testing.T) {
 	before := target.BlockChain().CurrentBlock().Hash()
 	bad := &engine.PayloadAttributes{Timestamp: final.Time() + 12}
 	fc := engine.ForkchoiceStateV1{
-		HeadBlockHash: final.Hash(),
+		HeadBlockHash:      final.Hash(),
 		FinalizedBlockHash: frozen.Hash(),
 	}
 	var reply engine.ForkChoiceResponse
@@ -108,11 +108,11 @@ func TestBALInvalidFCUV16PendingAuthorityBeforeEngineValidation(t *testing.T) {
 	}
 
 	observed := balV16InvalidFCUWitness{
-		InvalidRPCRejected: true,
-		ErrorText: rejectErr.Error(),
+		InvalidRPCRejected:         true,
+		ErrorText:                  rejectErr.Error(),
 		PendingHashAfterInvalidRPC: target.BlockChain().ExperimentalPendingBALFinalityHash().Hex(),
-		AnnouncedFinalizedHash: frozen.Hash().Hex(),
-		PendingWitnessAdmissions: admissions.Load(),
+		AnnouncedFinalizedHash:     frozen.Hash().Hex(),
+		PendingWitnessAdmissions:   admissions.Load(),
 		CanonicalFinalizedStateEmpty: target.BlockChain().CurrentFinalBlock() == nil &&
 			rawdb.ReadFinalizedBlockHash(target.ChainDb()) == (common.Hash{}),
 		NoBlockImportStarted: target.BlockChain().CurrentBlock().Hash() == before,
