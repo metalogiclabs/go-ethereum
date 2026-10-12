@@ -12,3 +12,5 @@ import "github.com/ethereum/go-ethereum/core/types"
 func (bc *BlockChain) pendingBALFinality() *types.Header {
 	return nil
 }
+
+func (bc *BlockChain) experimentalBALBeforeCommit(_ *types.Block) {}
