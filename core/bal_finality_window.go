@@ -60,7 +60,13 @@ func (bc *BlockChain) finalizedAncestryMember(final *types.Header, block *types.
 
 	currentAnchor := func() bool {
 		current := bc.CurrentFinalBlock()
-		return current != nil && current.Hash() == finalHash
+		if current != nil {
+			return current.Hash() == finalHash
+		}
+		// The untagged build has no pending witness. A tagged experiment can
+		// only reuse a proof while its exact volatile anchor remains active.
+		pending := bc.pendingBALFinality()
+		return pending != nil && pending.Hash() == finalHash
 	}
 	// Reuse only exact hashes already authenticated by the finalized anchor.
 	start := number - number%balFinalityWindowSize
