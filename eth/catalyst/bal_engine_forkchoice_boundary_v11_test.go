@@ -260,7 +260,10 @@ func runBALEngineV11(t *testing.T, scenario string, genesis *core.Genesis, block
 		TransactionBlocks: balEngineV11Txs,
 	}
 
-	if scenario == "direct-pretrusted-finality" {
+	if scenario == "direct-pretrusted-finality" || scenario == "engine-preauthorized-finality" {
+		// Test-only intervention: install the exact authenticated fixture
+		// anchor before invoking either downloader or real Engine RPC. This is
+		// NOT a safe general-purpose production finality admission method.
 		target.BlockChain().SetFinalized(frozen.Header())
 		r.FinalizedOnFirstSync = target.BlockChain().CurrentFinalBlock() != nil
 	} else if scenario != "engine-finalized-unknown" && scenario != "engine-head-equals-finalized" {
@@ -343,25 +346,31 @@ func runBALEngineV11(t *testing.T, scenario string, genesis *core.Genesis, block
 	r.ExecutedTxBlocks, r.ExecutionlessTxBlocks = checkBALEngineV11State(t, target.BlockChain(), blocks, sender, contract)
 	r.ValidatedBALAttachments = balAttachments.Load()
 	r.FinalizedAfterImport = target.BlockChain().CurrentFinalBlock() != nil
-	if !useEngine {
+	if !useEngine || scenario == "engine-preauthorized-finality" {
 		if r.ValidatedBALAttachments == 0 {
-			t.Fatal("positive direct source control never acquired a validated BAL")
+			t.Fatal("positive pretrusted-finality control never acquired a validated BAL")
 		}
 		if r.ExecutionlessTxBlocks == 0 {
-			t.Fatal("positive direct source control did not use verified BAL reconstruction")
+			t.Fatal("pretrusted-finality control did not use verified BAL reconstruction")
 		}
-	} else {
-		// A real cold-start FCU provides only a finalized HASH. The preceding
-		// finalized header may be absent from the downloader's prior local
-		// state, and no finality pointer is installed by importing blocks.
-		if r.FinalizedAfterImport {
-			t.Fatalf("early Engine FCU unexpectedly installed canonical finality: %+v", r)
-		}
-		if r.ExecutionlessTxBlocks != 0 {
-			t.Fatalf("Engine RPC path skipped execution without finalized ancestry: %+v", r)
-		}
-		if r.ValidatedBALAttachments == 0 {
-			t.Fatalf("missing BAL evidence: cannot separate finality gate from acquisition: %+v", r)
+	}
+	if useEngine {
+		if scenario == "engine-preauthorized-finality" {
+			if !r.FinalizedAfterImport {
+				t.Fatalf("early fixture finality was lost before Engine import: %+v", r)
+			}
+		} else {
+			// Cold Engine FCU supplies a hash, but does not automatically
+			// install a finality authorization during asynchronous import.
+			if r.FinalizedAfterImport {
+				t.Fatalf("early Engine FCU unexpectedly installed canonical finality: %+v", r)
+			}
+			if r.ExecutionlessTxBlocks != 0 {
+				t.Fatalf("Engine RPC skipped execution without finalized ancestry: %+v", r)
+			}
+			if r.ValidatedBALAttachments == 0 {
+				t.Fatalf("missing BAL evidence: cannot separate finality from acquisition: %+v", r)
+			}
 		}
 		// Once the node knows the block, the SAME authenticated Engine API
 		// should accept finality, but that does not retroactively avoid work.
@@ -444,5 +453,46 @@ func TestBALEngineV11AuthenticatedForkchoiceBoundary(t *testing.T) {
 			obs.SenderNonce != records[0].SenderNonce {
 			t.Fatalf("protected future differs: %+v", records)
 		}
+	}
+}
+
+
+// TestBALEngineV12ControlledPreauthorization holds the Engine API, corpus,
+// peers, finality HASH announcement, source, and protected future fixed while
+// varying only whether the exact finalized header is already installed in the
+// target before the first authenticated unknown-head Engine FCU. The early
+// installation is a deliberately non-production test oracle, not a proposed
+// implementation of forkchoice safety or a generalizable CL trust rule.
+func TestBALEngineV12ControlledPreauthorization(t *testing.T) {
+	genesis, blocks, sender, contract := makeBALEngineV11Corpus(t)
+	cases := []string{"engine-finalized-unknown", "engine-preauthorized-finality"}
+	var rows []balEngineV11Record
+	for _, scenario := range cases {
+		t.Run(scenario, func(t *testing.T) {
+			result := runBALEngineV11(t, scenario, genesis, blocks, sender, contract)
+			raw, err := json.Marshal(result)
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Logf("MG_BAL_ENGINE_V12_ARM %s", raw)
+			rows = append(rows, result)
+		})
+	}
+	if len(rows) != 2 {
+		t.Fatal("both authenticated FCU arms are required")
+	}
+	cold, preauthorized := rows[0], rows[1]
+	if !cold.AuthenticatedHTTP || !preauthorized.AuthenticatedHTTP ||
+		cold.EngineMethod != preauthorized.EngineMethod ||
+		cold.InitialEngineStatus != engine.SYNCING || preauthorized.InitialEngineStatus != engine.SYNCING {
+		t.Fatalf("Engine RPC authority was not matched: %+v", rows)
+	}
+	if cold.Head != preauthorized.Head || cold.StateRoot != preauthorized.StateRoot ||
+		cold.SenderNonce != preauthorized.SenderNonce {
+		t.Fatalf("protected state changed under authorization intervention: %+v", rows)
+	}
+	if cold.FinalizedOnFirstSync || cold.ExecutionlessTxBlocks != 0 ||
+		!preauthorized.FinalizedOnFirstSync || preauthorized.ExecutionlessTxBlocks == 0 {
+		t.Fatalf("finality timing failed to separate causal import paths: %+v", rows)
 	}
 }
