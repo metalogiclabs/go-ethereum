@@ -218,20 +218,33 @@ func (api *ConsensusAPI) ForkchoiceUpdatedV3(ctx context.Context, update engine.
 	return api.forkchoiceUpdated(ctx, update, params, engine.PayloadV3, false)
 }
 
+// validateForkchoiceUpdatedV4Attributes is the shared, side-effect-free
+// preflight for payload-attribute validity. A tagged pending-authority adapter
+// must use the SAME validation as the real Engine method before considering
+// temporary finality evidence. This extraction does not change normal Geth
+// decisions and does not establish whole-forkchoice semantic acceptance.
+func (api *ConsensusAPI) validateForkchoiceUpdatedV4Attributes(params *engine.PayloadAttributes) error {
+	if params == nil {
+		return nil
+	}
+	switch {
+	case params.Withdrawals == nil:
+		return attributesErr("missing withdrawals")
+	case params.BeaconRoot == nil:
+		return attributesErr("missing beacon root")
+	case params.SlotNumber == nil:
+		return attributesErr("missing slot number")
+	case !api.checkFork(params.Timestamp, forks.Amsterdam, forks.BPO3, forks.BPO4, forks.BPO5, forks.Bogota):
+		return unsupportedForkErr("fcuV4 must only be called for amsterdam payloads")
+	}
+	return nil
+}
+
 // ForkchoiceUpdatedV4 is equivalent to V3 with the addition of slot number
 // in the payload attributes. It supports only PayloadAttributesV4.
 func (api *ConsensusAPI) ForkchoiceUpdatedV4(ctx context.Context, update engine.ForkchoiceStateV1, params *engine.PayloadAttributes, custodyColumns *types.CustodyBitmap) (engine.ForkChoiceResponse, error) {
-	if params != nil {
-		switch {
-		case params.Withdrawals == nil:
-			return engine.STATUS_INVALID, attributesErr("missing withdrawals")
-		case params.BeaconRoot == nil:
-			return engine.STATUS_INVALID, attributesErr("missing beacon root")
-		case params.SlotNumber == nil:
-			return engine.STATUS_INVALID, attributesErr("missing slot number")
-		case !api.checkFork(params.Timestamp, forks.Amsterdam, forks.BPO3, forks.BPO4, forks.BPO5, forks.Bogota):
-			return engine.STATUS_INVALID, unsupportedForkErr("fcuV4 must only be called for amsterdam payloads")
-		}
+	if err := api.validateForkchoiceUpdatedV4Attributes(params); err != nil {
+		return engine.STATUS_INVALID, err
 	}
 	if custodyColumns != nil {
 		api.eth.BlobFetcher().UpdateCustody(*custodyColumns)
