@@ -30,8 +30,8 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p "$RUNNER_TEMP/v19"
-          gofmt -d eth/catalyst/bal_engine_crossfork_v19_test.go | tee "$RUNNER_TEMP/v19/gofmt.diff"
-          test ! -s "$RUNNER_TEMP/v19/gofmt.diff"
+          gofmt -w eth/catalyst/bal_engine_crossfork_v19_test.go
+          test -z "$(gofmt -l eth/catalyst/bal_engine_crossfork_v19_test.go)"
           go test -tags balexperiment ./eth/catalyst -run '^(TestBALV19CrossForkAdmissionPredicate|TestBALV18CompetingForkFinalityFailsClosed|TestBALEngineV13VolatilePendingWitness|TestBALInvalidFCUV17MalformedAttributesCannotAdmitPendingAuthority)$' -count=1 -v -timeout=35m 2>&1 | tee "$RUNNER_TEMP/v19/tests.log"
           grep -q 'MG_BAL_V19_PREDICATE CROSS_FORK_AND_MISSING_ANCESTRY_REJECTED' "$RUNNER_TEMP/v19/tests.log"
           test "$(grep -c 'MG_BAL_ENGINE_V13_ARM' "$RUNNER_TEMP/v19/tests.log")" -eq 2
