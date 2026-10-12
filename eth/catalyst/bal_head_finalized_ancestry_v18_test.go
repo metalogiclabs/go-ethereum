@@ -22,9 +22,9 @@ func TestBALV18CompetingForkFinalityFailsClosed(t *testing.T) {
 		headers[h.Hash()] = h
 	}
 	get := func(hash common.Hash) *types.Header { return headers[hash] }
-	cases := []struct{
-		name string
-		head common.Hash
+	cases := []struct {
+		name  string
+		head  common.Hash
 		final common.Hash
 		allow bool
 	}{
