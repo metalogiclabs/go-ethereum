@@ -3,9 +3,9 @@
 // Copyright 2026 The go-ethereum Authors
 // This file is part of the go-ethereum library.
 //
-// Fork-only NEGATIVE EXPERIMENT. It proves whether the V13/V15 test wrapper
-// grants a pending BAL finality capability before Engine API payload-attribute
-// validation. A green result witnesses a defect, not a safe implementation.
+// Fork-only V17 conservative repair. V16's negative evidence is preserved
+// unchanged on its source branch. A green test here means rejected V4
+// payload attributes did NOT create pending finality, not general Engine safety.
 package catalyst
 
 import (
@@ -37,7 +37,7 @@ type balV16InvalidFCUWitness struct {
 	ZeroHeadInvalidRequestCleared bool   `json:"zero_head_invalid_request_cleared"`
 }
 
-func TestBALInvalidFCUV16PendingAuthorityBeforeEngineValidation(t *testing.T) {
+func TestBALInvalidFCUV17MalformedAttributesCannotAdmitPendingAuthority(t *testing.T) {
 	genesis, blocks, _, _ := makeBALEngineV11Corpus(t)
 	root := t.TempDir()
 	sourceStack, source, _ := openBALEngineV11Node(t, filepath.Join(root, "source"), genesis, false, false)
@@ -133,14 +133,14 @@ func TestBALInvalidFCUV16PendingAuthorityBeforeEngineValidation(t *testing.T) {
 	observed.ZeroHeadInvalidRequestCleared =
 		target.BlockChain().ExperimentalPendingBALFinalityHash() == (common.Hash{})
 	if !observed.ZeroHeadInvalidRequestCleared ||
-		observed.PendingHashAfterInvalidRPC != observed.AnnouncedFinalizedHash ||
-		observed.PendingWitnessAdmissions != 1 {
-		t.Fatalf("V16 counterexample not reproduced: %+v", observed)
+		observed.PendingHashAfterInvalidRPC != (common.Hash{}).Hex() ||
+		observed.PendingWitnessAdmissions != 0 {
+		t.Fatalf("V17 invalid-attributes guard did not fail closed: %+v", observed)
 	}
 	bytes, err := json.Marshal(observed)
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Logf("MG_BAL_V16_ARM %s", bytes)
-	t.Log(fmt.Sprintf("MG_BAL_V16_VERDICT %s", "REJECTED_PREVALIDATION_PENDING_AUTHORITY"))
+	t.Logf("MG_BAL_V17_ARM %s", bytes)
+	t.Log(fmt.Sprintf("MG_BAL_V17_VERDICT %s", "MALFORMED_V4_NO_PENDING_AUTHORITY"))
 }
