@@ -34,6 +34,14 @@ func (a *balV13PendingEngineAPI) ForkchoiceUpdatedV4(ctx context.Context, update
 	// finalized pointer, once set by Geth, is never changed by this observer.
 	bc.SetExperimentalPendingBALFinality(nil)
 
+	// Deliberate fail-closed envelope: non-nil payload attributes require
+	// Engine API validation (fork version, withdrawals, slot, beacon root)
+	// before any speculative pending authority may be admitted. We do NOT
+	// duplicate Engine validation logic or pre-authorize this untested path.
+	if attrs != nil {
+		return a.ConsensusAPI.ForkchoiceUpdatedV4(ctx, update, attrs, custody)
+	}
+
 	// Only look up an early anchor when the head is still unknown and the
 	// request explicitly named a nonzero finalized HASH. Our test controls
 	// that the HTTP endpoint is JWT-authenticated, not directly callable.
