@@ -1,0 +1,88 @@
+name: Ethereum BAL In-Flight Revocation Counterexample V14 (Fork Only)
+
+on:
+  push:
+    branches:
+      - bal-pending-revocation-separator-v14
+  pull_request:
+    branches:
+      - bal-pending-finality-witness-v13
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  stale-admission-separator:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Pin official post-35930 Geth ancestor
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "Metalogic Research CI"
+          git config user.email "ci@mathgraph.org"
+          git fetch --no-tags https://github.com/ethereum/go-ethereum.git 3a6c2e3b35ef8caa3d39dcbea3fe9f09099cca8c
+          git merge --no-edit FETCH_HEAD
+          git merge-base --is-ancestor 3a6c2e3b35ef8caa3d39dcbea3fe9f09099cca8c HEAD
+          echo "MG_BAL_V14_SOURCE_HEAD=$(git rev-parse HEAD)"
+          echo "MG_BAL_V14_SOURCE_TREE=$(git rev-parse HEAD^{tree})"
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.27'
+          cache: false
+      - name: Frozen source format and source hashes
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/bal-v14"
+          paths=(core/bal_apply.go core/bal_pending_finality_disabled.go core/bal_pending_finality_experiment.go core/bal_pending_revocation_v14_test.go)
+          gofmt -d "${paths[@]}" | tee "$RUNNER_TEMP/bal-v14/format.txt"
+          test ! -s "$RUNNER_TEMP/bal-v14/format.txt"
+          sha256sum "${paths[@]}" | tee "$RUNNER_TEMP/bal-v14/source.sha256"
+      - name: Guard ordinary Geth and pre-existing finality semantics
+        shell: bash
+        run: |
+          set -euo pipefail
+          go test ./core -run '^(TestBALFinalityMultiwindowInsertChain|TestBALReconstructionFinalityForkImport|TestBALReconstructionRejectsBrokenSkeletonChain|TestInsertChainExecutesWhenReconstructionDisabled)$' -count=1 -timeout=15m
+          go test -tags balexperiment ./core -run '^TestBALPendingFinalityV13HashAndRevocation$' -count=1 -timeout=15m
+      - name: Deliberately reproduce stale admission on exact V13 logic
+        shell: bash
+        run: |
+          set -euo pipefail
+          go test -tags balexperiment ./core -run '^TestBALPendingV14RevokedWhileReconstructionInFlight$' -count=1 -v -timeout=20m \
+            2>&1 | tee "$RUNNER_TEMP/bal-v14/separator.log"
+          grep -q -- '--- PASS: TestBALPendingV14RevokedWhileReconstructionInFlight' "$RUNNER_TEMP/bal-v14/separator.log"
+          grep -q 'MG_BAL_V14_STALE_AUTHORIZATION' "$RUNNER_TEMP/bal-v14/separator.log"
+      - name: Record negative counterexample, not a passed safety proof
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - "$RUNNER_TEMP/bal-v14" <<'PY'
+          import json, pathlib, sys
+          root=pathlib.Path(sys.argv[1])
+          log=(root/"separator.log").read_text()
+          assert "revoked_before_commit=true" in log
+          assert "committed_executionless=true" in log
+          assert "canonical_finality=nil" in log
+          verdict={
+              "decision":"V13_INFLIGHT_REVOCATION_STALE_COMMIT_COUNTEREXAMPLE_WARRANTED_BOUNDED",
+              "expected_negative":"revoked witness still led to executionless first-block commit",
+              "safety_fence":"ABSENT_IN_TESTED_SOURCE",
+              "source_semantics":"tagged fork only; ordinary build never uses pending witness",
+              "proposed_smallest_remedy":"snapshot witness epoch; recheck atomically and fence during state commit",
+              "production_protocol_safety":"UNKNOWN",
+          }
+          (root/"verdict.json").write_text(json.dumps(verdict,sort_keys=True,indent=2)+"\n")
+          print("MG_BAL_V14_VERDICT",json.dumps(verdict,sort_keys=True))
+          PY
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: ethereum-bal-revocation-v14-evidence
+          path: ${{ runner.temp }}/bal-v14/
+          if-no-files-found: ignore
