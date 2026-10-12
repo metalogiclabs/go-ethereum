@@ -43,26 +43,26 @@ const (
 )
 
 type balEngineV11Record struct {
-	Case                    string  `json:"case"`
-	AuthenticatedHTTP       bool    `json:"authenticated_http"`
-	EngineMethod            string  `json:"engine_method"`
-	InitialEngineStatus     string  `json:"initial_engine_status"`
-	FinalizedOnFirstSync    bool    `json:"finalized_before_sync"`
-	FinalizedAfterImport    bool    `json:"finalized_after_import"`
-	PeerCount               int     `json:"peer_count"`
-	Head                    string  `json:"head"`
-	StateRoot               string  `json:"state_root"`
-	SenderNonce             uint64  `json:"sender_nonce"`
-	TransactionBlocks       int     `json:"transaction_blocks"`
-	ExecutedTxBlocks        int     `json:"executed_tx_blocks"`
-	ExecutionlessTxBlocks   int     `json:"executionless_tx_blocks"`
-	ValidatedBALAttachments int64   `json:"validated_bal_attachments"`
-	GraceChargedMS          float64 `json:"grace_charged_ms"`
-	FinalizedAfterRPCReplay bool    `json:"finalized_after_rpc_replay"`
-	PendingWitnessAdmissions int64 `json:"pending_witness_admissions"`
-	ReopenedReceiptsMatch   bool    `json:"reopened_receipts_match"`
-	ReopenedStateMatch      bool    `json:"reopened_state_match"`
-	SyncWallMS              float64 `json:"sync_wall_ms"`
+	Case                     string  `json:"case"`
+	AuthenticatedHTTP        bool    `json:"authenticated_http"`
+	EngineMethod             string  `json:"engine_method"`
+	InitialEngineStatus      string  `json:"initial_engine_status"`
+	FinalizedOnFirstSync     bool    `json:"finalized_before_sync"`
+	FinalizedAfterImport     bool    `json:"finalized_after_import"`
+	PeerCount                int     `json:"peer_count"`
+	Head                     string  `json:"head"`
+	StateRoot                string  `json:"state_root"`
+	SenderNonce              uint64  `json:"sender_nonce"`
+	TransactionBlocks        int     `json:"transaction_blocks"`
+	ExecutedTxBlocks         int     `json:"executed_tx_blocks"`
+	ExecutionlessTxBlocks    int     `json:"executionless_tx_blocks"`
+	ValidatedBALAttachments  int64   `json:"validated_bal_attachments"`
+	GraceChargedMS           float64 `json:"grace_charged_ms"`
+	FinalizedAfterRPCReplay  bool    `json:"finalized_after_rpc_replay"`
+	PendingWitnessAdmissions int64   `json:"pending_witness_admissions"`
+	ReopenedReceiptsMatch    bool    `json:"reopened_receipts_match"`
+	ReopenedStateMatch       bool    `json:"reopened_state_match"`
+	SyncWallMS               float64 `json:"sync_wall_ms"`
 }
 
 func makeBALEngineV11Corpus(t *testing.T) (*core.Genesis, []*types.Block, common.Address, common.Address) {
@@ -259,8 +259,8 @@ func runBALEngineV11(t *testing.T, scenario string, genesis *core.Genesis, block
 				Namespace: "engine",
 				Service: &balV13PendingEngineAPI{
 					ConsensusAPI: NewConsensusAPI(service),
-					service: service,
-					onAdmit: func() { witnessAccepted.Add(1) },
+					service:      service,
+					onAdmit:      func() { witnessAccepted.Add(1) },
 				},
 				Authenticated: true,
 			}
