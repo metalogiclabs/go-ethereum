@@ -34,6 +34,13 @@ func (a *balV13PendingEngineAPI) ForkchoiceUpdatedV4(ctx context.Context, update
 	// finalized pointer, once set by Geth, is never changed by this observer.
 	bc.SetExperimentalPendingBALFinality(nil)
 
+	// A rejected V4 payload must never introduce authority. Use the SAME
+	// side-effect-free validator invoked by the actual Engine API method,
+	// not a divergent hand-maintained list of attribute constraints.
+	if err := a.ConsensusAPI.validateForkchoiceUpdatedV4Attributes(attrs); err != nil {
+		return engine.STATUS_INVALID, err
+	}
+
 	// Only look up an early anchor when the head is still unknown and the
 	// request explicitly named a nonzero finalized HASH. Our test controls
 	// that the HTTP endpoint is JWT-authenticated, not directly callable.
