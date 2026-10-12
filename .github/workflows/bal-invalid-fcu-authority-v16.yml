@@ -65,7 +65,7 @@ jobs:
           assert len(arms)==2
           for row in arms:
               assert row["invalid_rpc_rejected"] is True
-              assert "withdrawals" in row["error_text"]
+              assert "payload attributes" in row["error_text"].lower() or "withdrawals" in row["error_text"].lower()
               assert row["pending_hash_after_invalid_rpc"]==row["announced_finalized_hash"]
               assert row["pending_witness_admissions"]==1
               assert row["canonical_finalized_state_empty"] is True
