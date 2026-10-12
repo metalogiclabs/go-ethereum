@@ -98,10 +98,10 @@ func makeBALEngineV11Corpus(t *testing.T) (*core.Genesis, []*types.Block, common
 			return
 		}
 		tx, err := types.SignTx(types.NewTx(&types.DynamicFeeTx{
-			ChainID: fork.ChainID,
-			Nonce: g.TxNonce(from),
-			To: &contract,
-			Gas: 500000,
+			ChainID:   fork.ChainID,
+			Nonce:     g.TxNonce(from),
+			To:        &contract,
+			Gas:       500000,
 			GasFeeCap: big.NewInt(1_000_000_000_000),
 			GasTipCap: big.NewInt(1_000_000_000),
 		}), g.Signer(), key)
@@ -122,13 +122,13 @@ func openBALEngineV11Node(t *testing.T, dir string, genesis *core.Genesis, recon
 	t.Helper()
 	jwtFile := filepath.Join(dir, "jwt.hex")
 	stack, err := node.New(&node.Config{
-		Name: "bal-engine-boundary",
-		DataDir: dir,
-		IPCPath: "",
-		AuthAddr: "127.0.0.1",
-		AuthPort: 0,
+		Name:      "bal-engine-boundary",
+		DataDir:   dir,
+		IPCPath:   "",
+		AuthAddr:  "127.0.0.1",
+		AuthPort:  0,
 		JWTSecret: jwtFile,
-		P2P: p2p.Config{NoDiscovery: true, ListenAddr: "127.0.0.1:0", MaxPeers: 10},
+		P2P:       p2p.Config{NoDiscovery: true, ListenAddr: "127.0.0.1:0", MaxPeers: 10},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -324,7 +324,7 @@ func runBALEngineV11(t *testing.T, scenario string, genesis *core.Genesis, block
 			finalHash = final.Hash()
 		}
 		fc := engine.ForkchoiceStateV1{
-			HeadBlockHash: final.Hash(),
+			HeadBlockHash:      final.Hash(),
 			FinalizedBlockHash: finalHash,
 		}
 		var result engine.ForkChoiceResponse
@@ -339,7 +339,7 @@ func runBALEngineV11(t *testing.T, scenario string, genesis *core.Genesis, block
 	awaitBALEngineV11(t, "Engine/sync-triggered target head", 70*time.Second, func() bool {
 		return target.BlockChain().CurrentBlock().Hash() == final.Hash()
 	})
-	r.SyncWallMS = float64(time.Since(start))/float64(time.Millisecond)
+	r.SyncWallMS = float64(time.Since(start)) / float64(time.Millisecond)
 	r.ExecutedTxBlocks, r.ExecutionlessTxBlocks = checkBALEngineV11State(t, target.BlockChain(), blocks, sender, contract)
 	r.ValidatedBALAttachments = balAttachments.Load()
 	r.FinalizedAfterImport = target.BlockChain().CurrentFinalBlock() != nil
@@ -394,7 +394,7 @@ func runBALEngineV11(t *testing.T, scenario string, genesis *core.Genesis, block
 			t.Fatal("authenticated known-head Engine replay failed to install finality")
 		}
 	}
-	r.GraceChargedMS = float64(target.Downloader().BALGraceConsumedForExperiment())/float64(time.Millisecond)
+	r.GraceChargedMS = float64(target.Downloader().BALGraceConsumedForExperiment()) / float64(time.Millisecond)
 	if r.GraceChargedMS > 25.00001 {
 		t.Fatalf("total grace budget exceeded: %+v", r)
 	}
