@@ -27,6 +27,24 @@ func (bc *BlockChain) SetExperimentalPendingBALFinality(header *types.Header) {
 	experimentalPendingBALFinality.Store(bc, header)
 }
 
+var experimentalBALCommitHooks sync.Map // *BlockChain -> func(*types.Block)
+
+func (bc *BlockChain) SetExperimentalBALBeforeCommitHook(hook func(*types.Block)) {
+	if hook == nil {
+		experimentalBALCommitHooks.Delete(bc)
+		return
+	}
+	experimentalBALCommitHooks.Store(bc, hook)
+}
+
+// This observation hook runs after validating the reconstructed state root,
+// but before the commit path. It changes no decision or authorization.
+func (bc *BlockChain) experimentalBALBeforeCommit(block *types.Block) {
+	if callback, ok := experimentalBALCommitHooks.Load(bc); ok {
+		callback.(func(*types.Block))(block)
+	}
+}
+
 func (bc *BlockChain) pendingBALFinality() *types.Header {
 	raw, ok := experimentalPendingBALFinality.Load(bc)
 	if !ok {
