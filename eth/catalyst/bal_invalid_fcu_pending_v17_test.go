@@ -90,8 +90,6 @@ func TestBALInvalidFCUV17RejectedBeforePendingAdmission(t *testing.T) {
 
 	before := target.BlockChain().CurrentBlock().Hash()
 	var beaconRoot common.Hash
-	var slot uint64 = 1
-	_ = slot
 	timestamp := final.Time() + 12
 	variants := []struct {
 		name  string
