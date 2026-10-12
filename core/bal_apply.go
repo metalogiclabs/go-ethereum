@@ -97,6 +97,12 @@ func (bc *BlockChain) useAccessListReconstruction(block *types.Block, vmConfig v
 		return false
 	}
 	final := bc.CurrentFinalBlock()
+	if final == nil {
+		// The ordinary build always returns nil. In tagged research, only an
+		// authenticated pending header can be considered; the same exact
+		// ancestry proof below is still mandatory at each block.
+		final = bc.pendingBALFinality()
+	}
 	return final != nil && bc.finalizedAncestryMember(final, block)
 }
 
