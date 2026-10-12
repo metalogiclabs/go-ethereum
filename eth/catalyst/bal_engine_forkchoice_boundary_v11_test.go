@@ -59,6 +59,7 @@ type balEngineV11Record struct {
 	ValidatedBALAttachments int64   `json:"validated_bal_attachments"`
 	GraceChargedMS          float64 `json:"grace_charged_ms"`
 	FinalizedAfterRPCReplay bool    `json:"finalized_after_rpc_replay"`
+	PendingWitnessAdmissions int64 `json:"pending_witness_admissions"`
 	ReopenedReceiptsMatch   bool    `json:"reopened_receipts_match"`
 	ReopenedStateMatch      bool    `json:"reopened_state_match"`
 	SyncWallMS              float64 `json:"sync_wall_ms"`
@@ -118,7 +119,7 @@ func makeBALEngineV11Corpus(t *testing.T) (*core.Genesis, []*types.Block, common
 	return genesis, blocks, from, contract
 }
 
-func openBALEngineV11Node(t *testing.T, dir string, genesis *core.Genesis, reconstruct, engineAPI bool) (*node.Node, *eth.Ethereum, string) {
+func openBALEngineV11Node(t *testing.T, dir string, genesis *core.Genesis, reconstruct, engineAPI bool, apiFactory ...func(*eth.Ethereum) rpc.API) (*node.Node, *eth.Ethereum, string) {
 	t.Helper()
 	jwtFile := filepath.Join(dir, "jwt.hex")
 	stack, err := node.New(&node.Config{
@@ -154,7 +155,11 @@ func openBALEngineV11Node(t *testing.T, dir string, genesis *core.Genesis, recon
 		t.Fatal(err)
 	}
 	if engineAPI {
-		if err := Register(stack, service); err != nil {
+		if len(apiFactory) > 0 && apiFactory[0] != nil {
+			// Research-only Engine RPC wrapper; actual HTTP/JWT auth remains
+			// enforced by the same Node authenticated API registration.
+			stack.RegisterAPIs([]rpc.API{apiFactory[0](service)})
+		} else if err := Register(stack, service); err != nil {
 			_ = stack.Close()
 			t.Fatal(err)
 		}
@@ -246,7 +251,22 @@ func runBALEngineV11(t *testing.T, scenario string, genesis *core.Genesis, block
 	useEngine := scenario != "direct-pretrusted-finality"
 	var target *eth.Ethereum
 	var jwtFile string
-	targetStack, target, jwtFile = openBALEngineV11Node(t, targetDir, genesis, true, useEngine)
+	var witnessAccepted atomic.Int64
+	var apiFactory []func(*eth.Ethereum) rpc.API
+	if scenario == "engine-pending-finality" {
+		apiFactory = append(apiFactory, func(service *eth.Ethereum) rpc.API {
+			return rpc.API{
+				Namespace: "engine",
+				Service: &balV13PendingEngineAPI{
+					ConsensusAPI: NewConsensusAPI(service),
+					service: service,
+					onAdmit: func() { witnessAccepted.Add(1) },
+				},
+				Authenticated: true,
+			}
+		})
+	}
+	targetStack, target, jwtFile = openBALEngineV11Node(t, targetDir, genesis, true, useEngine, apiFactory...)
 	target.Downloader().ConfigureBALGraceForExperiment(20 * time.Millisecond)
 	var balAttachments atomic.Int64
 	target.Downloader().ObserveBALPeerOutcomesForExperiment(func(_ string, _ uint64, outcome string, _ time.Duration) {
@@ -266,7 +286,7 @@ func runBALEngineV11(t *testing.T, scenario string, genesis *core.Genesis, block
 		// NOT a safe general-purpose production finality admission method.
 		target.BlockChain().SetFinalized(frozen.Header())
 		r.FinalizedOnFirstSync = target.BlockChain().CurrentFinalBlock() != nil
-	} else if scenario != "engine-finalized-unknown" && scenario != "engine-head-equals-finalized" {
+	} else if scenario != "engine-finalized-unknown" && scenario != "engine-head-equals-finalized" && scenario != "engine-pending-finality" {
 		t.Fatalf("unsupported test scenario %q", scenario)
 	} else if target.BlockChain().CurrentFinalBlock() != nil {
 		t.Fatal("Engine API target started with a finalized block")
@@ -345,6 +365,7 @@ func runBALEngineV11(t *testing.T, scenario string, genesis *core.Genesis, block
 	r.SyncWallMS = float64(time.Since(start)) / float64(time.Millisecond)
 	r.ExecutedTxBlocks, r.ExecutionlessTxBlocks = checkBALEngineV11State(t, target.BlockChain(), blocks, sender, contract)
 	r.ValidatedBALAttachments = balAttachments.Load()
+	r.PendingWitnessAdmissions = witnessAccepted.Load()
 	r.FinalizedAfterImport = target.BlockChain().CurrentFinalBlock() != nil
 	if !useEngine || scenario == "engine-preauthorized-finality" {
 		if r.ValidatedBALAttachments == 0 {
@@ -358,6 +379,11 @@ func runBALEngineV11(t *testing.T, scenario string, genesis *core.Genesis, block
 		if scenario == "engine-preauthorized-finality" {
 			if !r.FinalizedAfterImport {
 				t.Fatalf("early fixture finality was lost before Engine import: %+v", r)
+			}
+		} else if scenario == "engine-pending-finality" {
+			if r.FinalizedAfterImport || r.PendingWitnessAdmissions == 0 ||
+				r.ValidatedBALAttachments == 0 || r.ExecutionlessTxBlocks == 0 {
+				t.Fatalf("pending witness did not authorize scoped reconstruction without canonical finality: %+v", r)
 			}
 		} else {
 			// Cold Engine FCU supplies a hash, but does not automatically
