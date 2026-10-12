@@ -1,0 +1,112 @@
+name: Ethereum BAL Engine FCU Finality Boundary V11 (Fork Only)
+
+on:
+  push:
+    branches:
+      - bal-engine-forkchoice-boundary-v11
+  pull_request:
+    branches:
+      - bal-ceiling-aware-transfer-v10
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  engine-finality:
+    runs-on: ubuntu-latest
+    timeout-minutes: 55
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Pin official Geth post snap2 ancestry fix
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "Metalogic Research CI"
+          git config user.email "ci@mathgraph.org"
+          git fetch --no-tags https://github.com/ethereum/go-ethereum.git 3a6c2e3b35ef8caa3d39dcbea3fe9f09099cca8c
+          git merge --no-edit FETCH_HEAD
+          git merge-base --is-ancestor 3a6c2e3b35ef8caa3d39dcbea3fe9f09099cca8c HEAD
+          echo "MG_BAL_V11_SOURCE_HEAD=$(git rev-parse HEAD)"
+          echo "MG_BAL_V11_SOURCE_TREE=$(git rev-parse HEAD^{tree})"
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.27'
+          cache: false
+      - name: Preserve source identity and protected controls
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/bal-v11"
+          gofmt -l eth/catalyst/bal_engine_forkchoice_boundary_v11_test.go > "$RUNNER_TEMP/bal-v11/gofmt.txt"
+          test ! -s "$RUNNER_TEMP/bal-v11/gofmt.txt"
+          sha256sum eth/catalyst/bal_engine_forkchoice_boundary_v11_test.go eth/downloader/queue.go eth/downloader/bal_grace_experiment_v7.go | tee "$RUNNER_TEMP/bal-v11/source.sha256"
+          go test ./core -run '^(TestBALFinalityMultiwindowInsertChain|TestBALReconstructionFinalityForkImport|TestBALReconstructionRejectsBrokenSkeletonChain)$' -count=1 -timeout=15m
+          go test ./eth/downloader -run '^TestBALBoundedGrace' -count=1 -timeout=15m
+      - name: Compile exact authenticated Engine/API test binary
+        shell: bash
+        run: |
+          set -euo pipefail
+          go test -c -tags balexperiment -o "$RUNNER_TEMP/bal-v11/engine-v11.test" ./eth/catalyst
+          sha256sum "$RUNNER_TEMP/bal-v11/engine-v11.test" | tee "$RUNNER_TEMP/bal-v11/binary.sha256"
+      - name: Cold Engine forkchoice and direct-pretrusted positive control
+        shell: bash
+        run: |
+          set -euo pipefail
+          "$RUNNER_TEMP/bal-v11/engine-v11.test" \
+            -test.run '^TestBALEngineV11AuthenticatedForkchoiceBoundary$' \
+            -test.v -test.count=1 -test.timeout=30m \
+            2>&1 | tee "$RUNNER_TEMP/bal-v11/engine.log"
+          grep -q '^PASS$' "$RUNNER_TEMP/bal-v11/engine.log"
+          test "$(grep -c 'MG_BAL_ENGINE_V11_ARM' "$RUNNER_TEMP/bal-v11/engine.log")" -eq 3
+      - name: Independent source-exact decision ledger
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - "$RUNNER_TEMP/bal-v11" <<'PY'
+          import json, pathlib, sys
+          root = pathlib.Path(sys.argv[1])
+          lines = (root / "engine.log").read_text().splitlines()
+          rows = [json.loads(line.split("MG_BAL_ENGINE_V11_ARM ", 1)[1]) for line in lines if "MG_BAL_ENGINE_V11_ARM " in line]
+          assert len(rows) == 3
+          by_case = {r["case"]: r for r in rows}
+          assert len(by_case) == 3
+          direct = by_case["direct-pretrusted-finality"]
+          assert direct["finalized_before_sync"] is True and direct["executionless_tx_blocks"] > 0
+          for label in ("engine-finalized-unknown", "engine-head-equals-finalized"):
+              r = by_case[label]
+              assert r["authenticated_http"] is True
+              assert r["engine_method"] == "engine_forkchoiceUpdatedV4"
+              assert r["initial_engine_status"] == "SYNCING"
+              assert r["finalized_before_sync"] is False
+              assert r["finalized_after_import"] is False
+              assert r["finalized_after_rpc_replay"] is True
+              assert r["executionless_tx_blocks"] == 0
+              assert r["validated_bal_attachments"] > 0
+          for r in rows:
+              assert r["peer_count"] == 2 and r["transaction_blocks"] == 65
+              assert r["executed_tx_blocks"] + r["executionless_tx_blocks"] == 65
+              assert r["reopened_receipts_match"] and r["reopened_state_match"]
+              assert r["head"] == direct["head"] and r["state_root"] == direct["state_root"]
+              assert 0 <= r["grace_charged_ms"] <= 25.00001
+          verdict = {
+              "decision": "ENGINE_COLD_FINALITY_INSTALLATION_GAP_WARRANTED_BOUNDED",
+              "scope": "real authenticated Engine HTTP/JWT API, test-controlled client, encrypted dual-Geth TCP, 260 Amsterdam blocks",
+              "test_driver_is_actual_consensus_client": False,
+              "direct_executionless": direct["executionless_tx_blocks"],
+              "engine_executionless": {k: by_case[k]["executionless_tx_blocks"] for k in by_case if k != "direct-pretrusted-finality"},
+              "engine_verified_bal_attachments": {k: by_case[k]["validated_bal_attachments"] for k in by_case if k != "direct-pretrusted-finality"},
+              "receipt_equivalence": "NOT_ASSERTED_FOR_EXECUTIONLESS_HISTORY",
+              "external_CL_or_production_performance": "UNKNOWN",
+          }
+          (root/"verdict.json").write_text(json.dumps(verdict, indent=2, sort_keys=True)+"\n")
+          print("MG_BAL_V11_VERDICT", json.dumps(verdict, sort_keys=True))
+          PY
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: ethereum-bal-engine-finality-v11-evidence
+          path: ${{ runner.temp }}/bal-v11/
+          if-no-files-found: ignore
