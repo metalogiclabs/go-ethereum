@@ -1,0 +1,74 @@
+name: MathGraph Check - Native Check Run integration pilot
+on:
+  push:
+    branches: [mathgraph-check-actions-pilot-v0]
+  workflow_dispatch:
+permissions:
+  contents: read
+  pull-requests: read
+  actions: read
+  checks: write
+concurrency:
+  group: mathgraph-check-native-pilot
+  cancel-in-progress: false
+jobs:
+  native-check:
+    name: Real GitHub Check API pilot (not MathGraph App)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout exact existing MathGraph Check code
+        uses: actions/checkout@v4
+        with:
+          repository: metalogiclabs/mathgraph
+          ref: 942de0ba529efdff00b1c667850b9d3f9f05aa5d
+          persist-credentials: false
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Inspect real PR and write one neutral Check Run
+        env:
+          MG_CHECK_API_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          node --input-type=module <<'NODE'
+          import {loadPR, analyze, checkOutput, githubAPI} from './integrations/mathgraph-check-github/core.mjs';
+          const repository='metalogiclabs/go-ethereum';
+          const number=19;
+          const expected='a04aa77aaebd81d11274560e8d24d90c6f417589';
+          const token=process.env.MG_CHECK_API_TOKEN;
+          if(!token)throw new Error('MISSING_ACTIONS_INSTALLATION_TOKEN');
+          const source=await loadPR(repository,number,token);
+          if(source.sha!==expected)throw new Error('SOURCE_PR19_HEAD_CHANGED');
+          const result=analyze(source);
+          if(result.authority!=='ADVISORY_ONLY' ||
+             result.finding.code!=='DECLARED_VERIFICATION_RESIDUAL' ||
+             result.ci.state!=='GITHUB_REPORTED_SUCCESS_AT_EXACT_HEAD')
+            throw new Error('SOURCE_BOUNDARY_PRECONDITIONS_CHANGED');
+          const found=result.declared_limits.map(v=>v.name);
+          if(!found.includes('remote_conflicting_fcu') || !found.includes('concurrent_fcu'))
+            throw new Error('SOURCE_DECLARED_RESIDUAL_MISSING');
+          const fresh=await githubAPI('/repos/'+repository+'/pulls/'+number,token);
+          if(fresh.head.sha!==expected)throw new Error('STALE_PR_HEAD');
+          const check=checkOutput(result);
+          check.name='MathGraph Check / evidence scope (Actions pilot)';
+          check.output.title='Evidence gap in declared test scope (advisory)';
+          const ext='mathgraph-actions-pilot:'+repository+'#'+number+'@'+expected;
+          const old=await githubAPI('/repos/'+repository+'/commits/'+expected+
+            '/check-runs?per_page=100',token);
+          if(!Array.isArray(old.check_runs) || (old.total_count||0)>old.check_runs.length)
+            throw new Error('CHECK_RUN_IDEMPOTENCY_VISIBILITY_INCOMPLETE');
+          const existing=old.check_runs.find(c=>c.external_id===ext && c.name===check.name);
+          if(existing){
+            console.log('MATHGRAPH_ACTIONS_NATIVE_CHECK_ALREADY_EXISTS',existing.id);
+          }else{
+            const created=await githubAPI('/repos/'+repository+'/check-runs',token,'POST',{
+              ...check,head_sha:expected,external_id:ext
+            });
+            if(!Number.isSafeInteger(created.id) || created.conclusion!=='neutral' ||
+               created.head_sha!==expected) throw new Error('CREATED_CHECK_IDENTITY_MISMATCH');
+            console.log('MATHGRAPH_ACTIONS_NATIVE_CHECK_CREATED',created.id);
+          }
+          console.log('MATHGRAPH_BOUNDARY=REAL_GITHUB_CHECK_VIA_GITHUB_ACTIONS_NOT_MATHGRAPH_APP');
+          NODE
