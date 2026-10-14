@@ -1,0 +1,45 @@
+name: BAL V19 Engine Crossfork Qualification (Fork Only)
+on:
+  push:
+    branches:
+      - bal-engine-crossfork-v19
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  qualification:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.27'
+          cache: false
+      - name: Pin official source
+        run: |
+          set -euo pipefail
+          git config user.name "Metalogic CI"
+          git config user.email "ci@mathgraph.org"
+          git fetch --no-tags https://github.com/ethereum/go-ethereum.git 3a6c2e3b35ef8caa3d39dcbea3fe9f09099cca8c
+          git merge --no-edit FETCH_HEAD
+          echo "MG_BAL_V19_SOURCE_TREE=$(git rev-parse HEAD^{tree})"
+      - name: Run predicate and Engine integration controls
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/v19"
+          gofmt -w eth/catalyst/bal_engine_crossfork_v19_test.go
+          test -z "$(gofmt -l eth/catalyst/bal_engine_crossfork_v19_test.go)"
+          go test -tags balexperiment ./eth/catalyst -run '^(TestBALV19CrossForkAdmissionPredicate|TestBALV18CompetingForkFinalityFailsClosed|TestBALEngineV13VolatilePendingWitness|TestBALInvalidFCUV17MalformedAttributesCannotAdmitPendingAuthority)$' -count=1 -v -timeout=35m 2>&1 | tee "$RUNNER_TEMP/v19/tests.log"
+          grep -q 'MG_BAL_V19_PREDICATE CROSS_FORK_AND_MISSING_ANCESTRY_REJECTED' "$RUNNER_TEMP/v19/tests.log"
+          test "$(grep -c 'MG_BAL_ENGINE_V13_ARM' "$RUNNER_TEMP/v19/tests.log")" -eq 2
+          test "$(grep -c 'MG_BAL_V17_ARM' "$RUNNER_TEMP/v19/tests.log")" -eq 1
+          echo "V19_BOUNDARY=predicate_plus_valid_engine_controls;remote_conflicting_fcu=UNKNOWN;concurrent_fcu=UNKNOWN" | tee "$RUNNER_TEMP/v19/boundary.txt"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: bal-v19-qualification-evidence
+          path: ${{ runner.temp }}/v19/
+          if-no-files-found: ignore
