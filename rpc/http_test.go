@@ -237,7 +237,12 @@ func TestNewContextWithHeaders(t *testing.T) {
 			}
 		}
 		writer.WriteHeader(http.StatusOK)
-		_, _ = writer.Write([]byte(`{}`))
+		var req struct { ID json.RawMessage `json:"id"` }
+		if err := json.NewDecoder(request.Body).Decode(&req); err != nil {
+			t.Errorf("decode request: %v", err)
+			return
+		}
+		_, _ = fmt.Fprintf(writer, `{"jsonrpc":"2.0","id":%s}`, req.ID)
 	}))
 	defer server.Close()
 
