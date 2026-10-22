@@ -16,3 +16,4 @@ This fixture intentionally contains **no code-correctness claim** or
 production readiness assertion. The existence of this PR is not a security fix.
 
 acceptance_behavior=NOT_TESTED
+monitor_acceptance_revision=20261023_SOURCE_CHANGE_NO_PROOF
