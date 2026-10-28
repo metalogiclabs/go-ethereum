@@ -133,7 +133,7 @@ func TestBALV20SerialInvalidFCUClearsPending(t *testing.T) {
 	t.Log("MG_BAL_V20_SERIAL_CONTROL_PASS authenticated_valid_then_invalid_clear")
 }
 
-func TestBALV20ConcurrentLateAdmissionDoesNotRestoreInvalidatedPending(t *testing.T) {
+func TestBALV21ConcurrentInvalidationSuppressesOldAdmission(t *testing.T) {
 	entered := make(chan struct{})
 	release := make(chan struct{})
 	var releaseOnce sync.Once
@@ -157,7 +157,7 @@ func TestBALV20ConcurrentLateAdmissionDoesNotRestoreInvalidatedPending(t *testin
 	}()
 	select {
 	case <-entered:
-		t.Log("MG_BAL_V20_ORDER first_authenticated_fcu_waiting_before_admission")
+		t.Log("MG_BAL_V21_ORDER first_authenticated_fcu_waiting_before_admission")
 	case <-time.After(20*time.Second):
 		t.Fatal("UNKNOWN/setup: first FCU never reached source-qualified admission point")
 	}
@@ -171,7 +171,7 @@ func TestBALV20ConcurrentLateAdmissionDoesNotRestoreInvalidatedPending(t *testin
 	if got := h.target.BlockChain().ExperimentalPendingBALFinalityHash(); got != (common.Hash{}) {
 		t.Fatalf("UNKNOWN/setup: invalidating FCU did not leave empty witness: %s", got.Hex())
 	}
-	t.Log("MG_BAL_V20_ORDER second_authenticated_fcu_completed_invalidated_empty_witness")
+	t.Log("MG_BAL_V21_ORDER second_authenticated_fcu_completed_invalidated_empty_witness")
 	releaseOnce.Do(func() { close(release) })
 	select {
 	case first := <-firstDone:
@@ -181,12 +181,13 @@ func TestBALV20ConcurrentLateAdmissionDoesNotRestoreInvalidatedPending(t *testin
 	case <-time.After(20*time.Second):
 		t.Fatal("UNKNOWN/setup: first FCU did not complete after release")
 	}
-	if h.admissions.Load() != 1 {
-		t.Fatalf("UNKNOWN/setup: first FCU admission callback missing: %d", h.admissions.Load())
+	if admissions := h.admissions.Load(); admissions != 0 {
+		t.Logf("MG_BAL_V21_OBSTRUCTION STALE_FCU_ADMITTED count=%d", admissions)
+		t.Fatalf("older FCU admitted stale pending authority after newer invalidation: admissions=%d", admissions)
 	}
 	if got := h.target.BlockChain().ExperimentalPendingBALFinalityHash(); got != (common.Hash{}) {
-		t.Logf("MG_BAL_V20_OBSTRUCTION STALE_FCU_REINSTALLED_PENDING_WITNESS pending=%s older_final=%s", got.Hex(), h.frozen.Hash().Hex())
+		t.Logf("MG_BAL_V21_OBSTRUCTION STALE_FCU_REINSTALLED_PENDING_WITNESS pending=%s older_final=%s", got.Hex(), h.frozen.Hash().Hex())
 		t.Fatalf("stale earlier FCU reinstated pending authority after later invalidation")
 	}
-	t.Log("MG_BAL_V20_CONCURRENT_CONTROL_PASS pending_empty_after_older_fcu_completed")
+	t.Log("MG_BAL_V21_SUPERSESSION_PASS pending_empty_after_older_fcu_completed")
 }
