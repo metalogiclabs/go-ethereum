@@ -21,11 +21,13 @@ jobs:
       - name: Pin exact official Geth source
         run: |
           set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/v20"
+          echo "MG_BAL_V20_EXPERIMENT_COMMIT=$(git rev-parse HEAD)" | tee "$RUNNER_TEMP/v20/source.txt"
           git config user.name "Metalogic CI"
           git config user.email "ci@mathgraph.org"
           git fetch --no-tags https://github.com/ethereum/go-ethereum.git 3a6c2e3b35ef8caa3d39dcbea3fe9f09099cca8c
           git merge --no-edit FETCH_HEAD
-          echo "MG_BAL_V20_MERGED_SOURCE_TREE=$(git rev-parse HEAD^{tree})"
+          echo "MG_BAL_V20_MERGED_SOURCE_TREE=$(git rev-parse HEAD^{tree})" | tee -a "$RUNNER_TEMP/v20/source.txt"
       - name: Run authenticated serial and concurrent FCU schedules
         run: |
           set -euo pipefail
