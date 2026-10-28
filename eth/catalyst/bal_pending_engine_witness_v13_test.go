@@ -14,6 +14,7 @@ package catalyst
 import (
 	"context"
 	"encoding/json"
+	"sync"
 	"testing"
 
 	"github.com/ethereum/go-ethereum/beacon/engine"
@@ -24,9 +25,14 @@ import (
 
 type balV13PendingEngineAPI struct {
 	*ConsensusAPI
-	service *eth.Ethereum
-	onAdmit func()
+	service     *eth.Ethereum
+	onAdmit     func()
 	beforeAdmit func()
+	// revisionMu serializes revocation with the final generation check.
+	// Remote ancestry fetching and the test synchronization point remain outside
+	// the lock, so a newer FCU can supersede a stalled older FCU.
+	revisionMu sync.Mutex
+	revision   uint64
 }
 
 // balV18ProveFinalizedAncestor requires an exact hash-linked path from the
@@ -61,7 +67,11 @@ func (a *balV13PendingEngineAPI) ForkchoiceUpdatedV4(ctx context.Context, update
 	bc := a.service.BlockChain()
 	// Every FCU revokes the previous pending witness. A known canonical
 	// finalized pointer, once set by Geth, is never changed by this observer.
+	a.revisionMu.Lock()
+	a.revision++
+	myRevision := a.revision
 	bc.SetExperimentalPendingBALFinality(nil)
+	a.revisionMu.Unlock()
 
 	// Deliberate fail-closed envelope: non-nil payload attributes require
 	// Engine API validation (fork version, withdrawals, slot, beacon root)
@@ -102,10 +112,14 @@ func (a *balV13PendingEngineAPI) ForkchoiceUpdatedV4(ctx context.Context, update
 			if a.beforeAdmit != nil {
 				a.beforeAdmit()
 			}
-			bc.SetExperimentalPendingBALFinality(finalHeader)
-			if a.onAdmit != nil {
-				a.onAdmit()
+			a.revisionMu.Lock()
+			if a.revision == myRevision {
+				bc.SetExperimentalPendingBALFinality(finalHeader)
+				if a.onAdmit != nil {
+					a.onAdmit()
+				}
 			}
+			a.revisionMu.Unlock()
 		}
 	}
 	return a.ConsensusAPI.ForkchoiceUpdatedV4(ctx, update, attrs, custody)
