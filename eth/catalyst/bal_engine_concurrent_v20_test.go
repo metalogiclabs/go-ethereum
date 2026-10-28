@@ -191,3 +191,60 @@ func TestBALV21ConcurrentInvalidationSuppressesOldAdmission(t *testing.T) {
 	}
 	t.Log("MG_BAL_V21_SUPERSESSION_PASS pending_empty_after_older_fcu_completed")
 }
+
+// A newer, independently authenticated FCU with a different *valid* finalized
+// hash must retain its witness when an older in-flight FCU finally returns.
+// Unlike V21's invalidating B, this schedule tests both non-amplification of
+// stale authority and non-suppression of the more recent valid witness.
+func TestBALV22ConcurrentNewerValidWitnessPrevails(t *testing.T) {
+	entered := make(chan struct{})
+	release := make(chan struct{})
+	var releaseOnce sync.Once
+	defer releaseOnce.Do(func() { close(release) })
+	var pauseFirst atomic.Bool
+	h := openBALV20Harness(t, func() {
+		if pauseFirst.CompareAndSwap(false, true) {
+			close(entered)
+			<-release
+		}
+	})
+	if h.final.Hash() == h.frozen.Hash() {
+		t.Fatal("UNKNOWN/setup: competing finality hashes must differ")
+	}
+	olderDone := make(chan error, 1)
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		var reply engine.ForkChoiceResponse
+		olderDone <- h.first.CallContext(ctx, &reply, "engine_forkchoiceUpdatedV4", h.validFCU(), nil, nil)
+	}()
+	select {
+	case <-entered:
+		t.Log("MG_BAL_V22_ORDER older_valid_fcu_paused_before_admission")
+	case <-time.After(20*time.Second):
+		t.Fatal("UNKNOWN/setup: older FCU did not reach source-qualified admission")
+	}
+	newer := engine.ForkchoiceStateV1{HeadBlockHash: h.final.Hash(), FinalizedBlockHash: h.final.Hash()}
+	result, err := callBALV20(t, h.second, newer)
+	if err != nil || result.PayloadStatus.Status == engine.INVALID {
+		t.Fatalf("UNKNOWN/setup: newer authenticated finality update not admissible: %+v err=%v", result, err)
+	}
+	if got := h.target.BlockChain().ExperimentalPendingBALFinalityHash(); got != h.final.Hash() || h.admissions.Load() != 1 {
+		t.Fatalf("UNKNOWN/setup: newer qualified FCU did not install exact witness: got=%s newer=%s admissions=%d", got.Hex(), h.final.Hash().Hex(), h.admissions.Load())
+	}
+	t.Log("MG_BAL_V22_ORDER newer_valid_fcu_admitted_different_finalized_hash")
+	releaseOnce.Do(func() { close(release) })
+	select {
+	case err := <-olderDone:
+		if err != nil {
+			t.Fatalf("UNKNOWN/setup: older FCU failed after release: %v", err)
+		}
+	case <-time.After(20*time.Second):
+		t.Fatal("UNKNOWN/setup: older FCU did not complete")
+	}
+	if got := h.target.BlockChain().ExperimentalPendingBALFinalityHash(); got != h.final.Hash() || h.admissions.Load() != 1 {
+		t.Logf("MG_BAL_V22_OBSTRUCTION OLD_FCU_OVERWROTE_NEW_VALID_WITNESS got=%s newer=%s admissions=%d", got.Hex(), h.final.Hash().Hex(), h.admissions.Load())
+		t.Fatalf("older FCU changed the newer valid pending witness")
+	}
+	t.Log("MG_BAL_V22_COMPETING_VALID_PASS newer_witness_preserved_after_older_fcu_completed")
+}
