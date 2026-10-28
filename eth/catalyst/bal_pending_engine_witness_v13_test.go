@@ -26,6 +26,7 @@ type balV13PendingEngineAPI struct {
 	*ConsensusAPI
 	service *eth.Ethereum
 	onAdmit func()
+	beforeAdmit func()
 }
 
 // balV18ProveFinalizedAncestor requires an exact hash-linked path from the
@@ -97,6 +98,10 @@ func (a *balV13PendingEngineAPI) ForkchoiceUpdatedV4(ctx context.Context, update
 			// This is an ephemeral exact-hash witness, not SETFINALIZED.
 			// The importer still requires authenticated hash ancestry
 			// through finalizedAncestryMember before every skipped block.
+			// Test-only synchronization point; nil in all existing controls.
+			if a.beforeAdmit != nil {
+				a.beforeAdmit()
+			}
 			bc.SetExperimentalPendingBALFinality(finalHeader)
 			if a.onAdmit != nil {
 				a.onAdmit()
